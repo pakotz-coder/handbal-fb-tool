@@ -86,7 +86,31 @@ Raspunde DOAR cu textul postarii, gata de copiat pe Facebook.`;
 async function scrapeMatch(id) {
   const url =
     "https://www.sportinfocentar2.com/coman/utakmice/" + id + ".js?" + Date.now();
-  const res = await fetch(url);
+
+  // Browser-like headers + 8s abort, so the source doesn't block/hang a datacenter request.
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), 8000);
+  let res;
+  try {
+    res = await fetch(url, {
+      signal: ctrl.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.frhlive2.com/",
+        "Accept": "*/*",
+      },
+    });
+  } catch (e) {
+    throw new Error(
+      e.name === "AbortError"
+        ? "Sursa de date nu a raspuns la timp (posibil blocheaza serverul). Mai incearca sau spune-mi."
+        : "Nu am putut contacta sursa de date: " + e.message
+    );
+  } finally {
+    clearTimeout(timer);
+  }
+
   if (!res.ok) {
     throw new Error("Sursa de date a raspuns cu " + res.status + ". Verifica ID-ul meciului.");
   }
