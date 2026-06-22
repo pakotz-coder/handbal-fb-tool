@@ -2,7 +2,7 @@
 // Scrapes match data server-side (no CORS) and generates the FB post via Claude API.
 // The ANTHROPIC_API_KEY lives only here, as a Netlify environment variable.
 
-const MODEL = "claude-sonnet-4-6"; // swap to "claude-opus-4-8" for richer Transylvanian flavor (slower/costlier)
+const MODEL = "claude-opus-4-8"; // swap to "claude-opus-4-8" for richer Transylvanian flavor (slower/costlier)
 const ANTHROPIC_VERSION = "2023-06-01";
 
 // ---- System prompts (faithful to the fb-handball-post skill) -----------------
