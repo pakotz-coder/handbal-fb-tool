@@ -73,6 +73,9 @@
   .copy.done{background:var(--green);color:#04140a}
   .err{background:#2a1412;border:1px solid #5a2420;color:#ff8a80;padding:12px 14px;border-radius:8px;font-size:14px}
   .hide{display:none}
+  .bm{display:inline-block;margin:8px 0 2px;padding:9px 16px;background:var(--live);color:#fff;
+    text-decoration:none;border-radius:8px;font-weight:600;font-size:14px;cursor:grab}
+  .bm:active{cursor:grabbing}
   .hint{font-size:12px;color:var(--muted);margin-top:6px}
   .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.3);
     border-top-color:#04140a;border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:8px}
@@ -95,12 +98,17 @@
   <div id="panelPost">
     <div class="card">
       <div class="full">
-        <label>ID meci (utakmica)</label>
-        <input id="matchId" placeholder="ex: 123456" inputmode="numeric">
-        <div class="hint">Numărul din linkul frhlive2.com/indexut.html?utakmica=<b>…</b></div>
+        <label>1 · Ia datele meciului</label>
+        <div class="hint">Trage o singură dată butonul de mai jos în bara de favorite a browserului:</div>
+        <a class="bm" id="bm" href="#">📋 Date meci HandbaLive</a>
+        <div class="hint">Apoi, pe pagina <b>frhlive2.com/indexut.html?utakmica=…</b> (după meci), dă click pe el — copiază datele în clipboard.</div>
       </div>
       <div class="full">
-        <label>Context</label>
+        <label>2 · Lipește datele (Ctrl+V)</label>
+        <textarea id="jsonPost" rows="3" placeholder="Lipește aici datele copiate de bookmarklet"></textarea>
+      </div>
+      <div class="full">
+        <label>3 · Context</label>
         <input id="ctxPost" placeholder='ex: finală, Corona campioană la Junioare 1'>
         <div class="chips" id="ctxChips"></div>
       </div>
@@ -167,6 +175,11 @@ CONTEXT_CHIPS.forEach(c=>{
   chips.appendChild(b);
 });
 
+// Bookmarklet: scrapes match data on the frhlive2 page (same logic as the console script)
+// and copies it to the clipboard. Runs on the source origin, so no CORS / no timeout.
+const BOOKMARKLET = "javascript:(async()=>{try{var id=new URLSearchParams(location.search).get('utakmica');var r=await fetch('https://www.sportinfocentar2.com/coman/utakmice/'+id+'.js?'+Date.now());var d=new Function('return('+await r.text()+')')();var u=d.ut[0],pl=d.sastavi||[],ev=d.dogadjaji||[];var ts=function(eid){return pl.filter(function(p){return p.ekipa===eid}).map(function(p){return{name:p.ime+' '+p.prezime,goals:(p.sutd||0),attempts:(p.sutp||0),assists:p.asistencija||0,steals:p.osvojenih||0,sus:p.iskljucenja||0,val:p.valigrac,isGK:p.tipigraca==1||(p.obranep>0),saves:p.obraned||0,faced:p.obranep||0}}).sort(function(a,b){return b.goals-a.goals})};var goals=ev.filter(function(e){return e.td===0&&e.ig&&(e.ish===0||e.ish===4)}).map(function(e){return{min:e.vr,team:e.e,name:e.i+' '+e.p,num:e.pz,r1:e.r1,r2:e.r2}});var out={home:u.n1,away:u.n2,score:u.r1+'-'+u.r2,ht:u.p11+'-'+u.p12,competition:u.nn,venue:u.mn,city:u.mm,homeScorers:ts(u.ekipa1),awayScorers:ts(u.ekipa2),goals:goals,matchId:id};var j=JSON.stringify(out);try{await navigator.clipboard.writeText(j);alert('Date meci copiate! Lipeste-le in tool.');}catch(_){window.prompt('Copiaza datele (Ctrl+C, Enter):',j);}}catch(e){alert('Eroare bookmarklet: '+e.message);}})();";
+document.getElementById('bm').setAttribute('href', BOOKMARKLET);
+
 function setMode(m){
   const post=m==='post';
   document.getElementById('tabPost').classList.toggle('on',post);
@@ -188,8 +201,8 @@ async function run(mode){
 
   let payload={mode};
   if(mode==='post'){
-    if(!val('matchId')){btn.disabled=false;btn.textContent=label;return showErr('Introdu ID-ul meciului.');}
-    payload.matchId=val('matchId');payload.context=val('ctxPost');payload.youtube=val('ytPost');
+    if(!val('jsonPost')){btn.disabled=false;btn.textContent=label;return showErr('Lipsește JSON-ul meciului. Rulează bookmarkletul pe pagina frhlive2 și lipește datele.');}
+    payload.matchData=val('jsonPost');payload.context=val('ctxPost');payload.youtube=val('ytPost');
   }else{
     payload.home=val('home');payload.away=val('away');payload.context=val('ctxPre');
     payload.time=val('time');payload.venue=val('venue');payload.city=val('cityPre');payload.youtube=val('ytPre');
