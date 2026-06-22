@@ -2,7 +2,7 @@
 // Scrapes match data server-side (no CORS) and generates the FB post via Claude API.
 // The ANTHROPIC_API_KEY lives only here, as a Netlify environment variable.
 
-const MODEL = "claude-opus-4-8"; // swap to "claude-opus-4-8" for richer Transylvanian flavor (slower/costlier)
+const MODEL = "claude-sonnet-4-6"; // swap to "claude-opus-4-8" for richer Transylvanian flavor (slower/costlier)
 const ANTHROPIC_VERSION = "2023-06-01";
 
 // ---- System prompts (faithful to the fb-handball-post skill) -----------------
@@ -182,7 +182,7 @@ async function callClaude(system, userText) {
     },
     body: JSON.stringify({
       model: MODEL,
-      max_tokens: 2000,
+      max_tokens: 1500,
       system,
       messages: [{ role: "user", content: userText }],
     }),
@@ -229,11 +229,18 @@ exports.handler = async (event) => {
       return { statusCode: 200, body: JSON.stringify({ article }) };
     }
 
-    // default: post-match
-    if (!body.matchId) {
-      return { statusCode: 400, body: JSON.stringify({ error: "Lipseste ID-ul meciului." }) };
+    // default: post-match — match data arrives pre-scraped from the browser bookmarklet
+    let matchData = body.matchData;
+    if (typeof matchData === "string") {
+      try {
+        matchData = JSON.parse(matchData);
+      } catch {
+        return { statusCode: 200, body: JSON.stringify({ error: "JSON-ul lipit nu e valid. Re-ruleaza bookmarkletul si copiaza din nou." }) };
+      }
     }
-    const matchData = await scrapeMatch(String(body.matchId).trim());
+    if (!matchData || !matchData.home) {
+      return { statusCode: 200, body: JSON.stringify({ error: "Lipsesc datele meciului. Ruleaza bookmarkletul pe pagina frhlive2 si lipeste JSON-ul." }) };
+    }
     const userText =
       `Context: ${body.context || "(fara context — deduce din competitie si scor)"}` +
       (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
