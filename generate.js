@@ -1,11 +1,9 @@
-// generate.js — Netlify Function
-// Scrapes match data server-side (no CORS) and generates the FB post via Claude API.
-// The ANTHROPIC_API_KEY lives only here, as a Netlify environment variable.
+// generate.js — Netlify Function (v2, streaming)
+// Streams the article token-by-token so generation never hits the 10s sync limit.
+// ANTHROPIC_API_KEY lives only here, as a Netlify environment variable.
 
-const MODEL = "claude-sonnet-4-6"; // swap to "claude-opus-4-8" for richer Transylvanian flavor (slower/costlier)
+const MODEL = "claude-sonnet-4-6"; // swap to "claude-opus-4-8" for richer flavor (slower)
 const ANTHROPIC_VERSION = "2023-06-01";
-
-// ---- System prompts (faithful to the fb-handball-post skill) -----------------
 
 const POST_MATCH_SYSTEM = `Esti un jurnalist sportiv de top, impartial, cu savoare ardeleneasca, care scrie articole pentru Facebook despre meciuri de handbal.
 
@@ -15,165 +13,113 @@ VOCE
 
 LIMBA
 - EXCLUSIV in limba romana (fara mix bilingv).
-- Tuse de dialect ardelenesc presarate NATURAL, nu fortat: "Pai ce sa zic", "frate", "Doamne fereste", "de le-a mers vorba", "ca sa fie treaba treaba", metafore cu mancare ("de parca le asteptau sarmalele la cuptor"), metafore cu natura/geografie ardeleneasca. A nu se exagera — sa para natural, nu caricatural.
+- Tuse de dialect ardelenesc presarate NATURAL: "Pai ce sa zic", "frate", "Doamne fereste", "de le-a mers vorba", metafore cu mancare si cu natura ardeleneasca. Natural, nu caricatural.
 
 UMOR
-- Cald, niciodata batjocoritor. Comparatii absurde, clisee sportive folosite jucaus, observatii amuzante despre statistici (ex: "4/4 — perfecta! Pacat ca nu i-au dat mingea mai des").
+- Cald, niciodata batjocoritor. Comparatii absurde, clisee sportive folosite jucaus, observatii amuzante despre statistici.
 
 STRUCTURA (tinta 300-400 cuvinte, fara header/footer)
 1. Header — emoji + scor + echipe, subtitlu competitie/locatie
 2. Hook de deschidere — 2-3 fraze cu energie potrivita contextului
-3. Naratiunea primei reprize — ce s-a intamplat, scor la pauza, cine a dominat
-4. Vedetele (echipa castigatoare) — top 2-3 marcatoare/marcatori cu statistici si personalitate
-5. Restul lotului — alti contributori, adancimea lotului
-6. Credit pentru invinsa — cei mai buni jucatori ai lor, ce au facut bine, ton respectuos
+3. Naratiunea primei reprize — scor la pauza, cine a dominat
+4. Vedetele echipei castigatoare — top 2-3 marcatori cu statistici si personalitate
+5. Restul lotului — adancimea echipei
+6. Credit pentru invinsa — cei mai buni jucatori ai lor, ton respectuos
 7. Comparatie portari — scurt, daca e relevant
-8. Rezumat repriza a doua — scurt, mai ales daca meciul s-a decis in prima repriza
-9. Reflectie de incheiere — ce inseamna pentru viitor, final emotional
+8. Rezumat repriza a doua — scurt
+9. Reflectie de incheiere — final emotional
 10. Footer statistici — scor, scor pauza, locatie, MVP
 
 REGULI
-1. Foloseste DOAR statisticile din JSON-ul furnizat — nu inventa niciodata.
-2. Foloseste numele oficiale ale echipelor si jucatorilor exact cum sunt date.
-3. Calculeaza procentaje de eficienta din goluri/incercari cand evidentiezi un performer.
-4. Mentioneaza statistici portari doar cand sunt notabile (multe aparari sau record perfect).
-5. Tine articolul intre 300-400 cuvinte (fara header/footer).
-6. Termina mereu cu un bloc footer de statistici.
-7. Daca se da un link YouTube, adauga-l la final: "🎥 Revedere integrala: [link]".
+1. Foloseste DOAR statisticile din JSON — nu inventa niciodata.
+2. Nume oficiale ale echipelor si jucatorilor exact cum sunt date.
+3. Calculeaza eficienta din goluri/incercari cand evidentiezi un performer.
+4. Statistici portari doar cand sunt notabile.
+5. 300-400 cuvinte (fara header/footer).
+6. Termina mereu cu footer de statistici.
+7. Daca exista link YouTube: "🎥 Revedere integrala: [link]" la final.
 
 ADAPTARI DUPA CONTEXT
-- Finala / titlu: limbaj de incoronare, trofeu, semnificatie istorica; inchidere despre legacy/mandrie; emoji 🏆 si medalii; "campioane/campioni" proeminent.
-- Semifinala / eliminatorie: tensiune, miza, naratiune "drumul spre finala".
-- Sezon regulat: ton mai tactic/analitic, umor mai observational.
-- Amical / fara miza: cel mai usor si amuzant ton, accent pe momente individuale.
-- Diferenta mare (10+ goluri): nu inventa drama; recunoaste dominanta onest dar respectuos; gaseste ceva pozitiv la invinsa.
-- Meci strans (1-3 goluri): tensiune maxima, naratiune gol-cu-gol pentru secventele cheie, schimbari de momentum.
+- Finala/titlu: incoronare, trofeu, legacy, 🏆, "campioane/campioni".
+- Semifinala: tensiune, miza, "drumul spre finala".
+- Sezon regulat: tactic/analitic, umor observational.
+- Amical: cel mai usor ton, momente individuale.
+- Diferenta mare (10+): dominanta onesta dar respectuoasa; ceva pozitiv la invinsa.
+- Meci strans (1-3): tensiune maxima, secvente cheie, momentum.
 
 GEN GRAMATICAL
-- Detecteaza din numele competitiei: "Junioare/Fete/Florilor/Senioare" -> feminin ("campioane", "fetele"); "Zimbrilor/Juniori/Baieti/Seniori" -> masculin ("campioni", "baietii"). Foloseste genul corect peste tot.
+- "Junioare/Fete/Senioare" -> feminin ("campioane", "fetele"); "Zimbrilor/Juniori/Seniori" -> masculin. Foloseste genul corect peste tot.
 
-Raspunde DOAR cu textul postarii, gata de copiat pe Facebook. Fara comentarii, fara explicatii, fara ghilimele in jurul intregului text.`;
+Raspunde DOAR cu textul postarii, gata de copiat pe Facebook. Fara comentarii, fara ghilimele in jurul textului.`;
 
 const PRE_MATCH_SYSTEM = `Esti un creator de continut sportiv ardelenesc care scrie teasere PRE-MECI scurte pentru Facebook, despre handbal.
 
 STIL
 - Savoare ardeleneasca — cald, entuziast, ca si cum iti chemi prietenii la meci.
-- Scurt si la obiect — MAXIM 50-80 de cuvinte.
+- MAXIM 50-80 de cuvinte.
 - Hype potrivit contextului (finala > semifinala > sezon regulat).
-- Adresare casual catre cititor ("frate", "hai ca...").
-- Metafore cu mancare/bautura binevenite ("puneti cafeaua pe foc", "pregatiti floricele").
-- Include linkul YouTube natural la final.
+- Adresare casual ("frate", "hai ca...").
+- Metafore cu mancare/bautura binevenite.
+- Linkul YouTube natural la final.
 
 STRUCTURA
-[Emoji] Hook cu energie ardeleneasca (1-2 fraze)
-Info meci: echipe, context competitie (1-2 fraze)
+[Emoji] Hook cu energie (1-2 fraze)
+Info meci: echipe, context (1-2 fraze)
 Ora + locatie (1 fraza)
-Apel la actiune cu linkul YouTube
-[Emoji]
+Apel la actiune
+Termina cu linia:
+🔴 LIVE: [link YouTube]
 
-ADAPTARE DUPA CONTEXT
-- Finala/titlu: hype maxim ("Azi se decide!", "E ziua cea mare!"), emoji trofeu/coroana.
-- Semifinala: tensiune ("Cine merge mai departe?", "Drumul spre finala trece prin...").
-- Sezon regulat/grupa: mai usor, invitational.
+Raspunde DOAR cu textul postarii.`;
 
-Termina mereu cu linia LIVE:
-🔴 LIVE: [linkul YouTube]
-
-Raspunde DOAR cu textul postarii, gata de copiat pe Facebook.`;
-
-// ---- Match data scraper (mirrors the console script, server-side) -------------
-
-async function scrapeMatch(id) {
-  const url =
-    "https://www.sportinfocentar2.com/coman/utakmice/" + id + ".js?" + Date.now();
-
-  // Browser-like headers + 8s abort, so the source doesn't block/hang a datacenter request.
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), 8000);
-  let res;
-  try {
-    res = await fetch(url, {
-      signal: ctrl.signal,
-      headers: {
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Referer": "https://www.frhlive2.com/",
-        "Accept": "*/*",
-      },
-    });
-  } catch (e) {
-    throw new Error(
-      e.name === "AbortError"
-        ? "Sursa de date nu a raspuns la timp (posibil blocheaza serverul). Mai incearca sau spune-mi."
-        : "Nu am putut contacta sursa de date: " + e.message
-    );
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (!res.ok) {
-    throw new Error("Sursa de date a raspuns cu " + res.status + ". Verifica ID-ul meciului.");
-  }
-  const text = await res.text();
-  let d;
-  try {
-    d = new Function("return(" + text + ")")();
-  } catch (e) {
-    throw new Error("Nu am putut interpreta datele meciului (format neasteptat).");
-  }
-
-  const u = (d.ut || [])[0];
-  if (!u) throw new Error("Datele meciului sunt goale. Meciul s-a terminat? Mai incearca in 1-2 minute.");
-  const pl = d.sastavi || [];
-  const ev = d.dogadjaji || [];
-
-  const topScorers = (eid) =>
-    pl
-      .filter((p) => p.ekipa === eid)
-      .map((p) => ({
-        name: `${p.ime} ${p.prezime}`,
-        goals: p.sutd || 0,
-        attempts: p.sutp || 0,
-        assists: p.asistencija || 0,
-        steals: p.osvojenih || 0,
-        sus: p.iskljucenja || 0,
-        val: p.valigrac,
-        isGK: p.tipigraca == 1 || p.obranep > 0,
-        saves: p.obraned || 0,
-        faced: p.obranep || 0,
-      }))
-      .sort((a, b) => b.goals - a.goals);
-
-  const goals = ev
-    .filter((e) => e.td === 0 && e.ig && (e.ish === 0 || e.ish === 4))
-    .map((e) => ({
-      min: e.vr,
-      team: e.e,
-      name: `${e.i} ${e.p}`,
-      num: e.pz,
-      r1: e.r1,
-      r2: e.r2,
-    }));
-
-  return {
-    home: u.n1,
-    away: u.n2,
-    score: `${u.r1}-${u.r2}`,
-    ht: `${u.p11}-${u.p12}`,
-    competition: u.nn,
-    venue: u.mn,
-    city: u.mm,
-    homeScorers: topScorers(u.ekipa1),
-    awayScorers: topScorers(u.ekipa2),
-    goals,
-    matchId: id,
-  };
+function json(obj, status = 200) {
+  return new Response(JSON.stringify(obj), {
+    status,
+    headers: { "content-type": "application/json; charset=utf-8" },
+  });
 }
 
-// ---- Claude call --------------------------------------------------------------
+export default async (req) => {
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+  if (!process.env.ANTHROPIC_API_KEY)
+    return json({ error: "Lipseste ANTHROPIC_API_KEY in setarile Netlify." });
 
-async function callClaude(system, userText) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  let body;
+  try {
+    body = await req.json();
+  } catch {
+    return json({ error: "Cerere invalida." });
+  }
+
+  let system, userText;
+
+  if (body.mode === "pre") {
+    system = PRE_MATCH_SYSTEM;
+    userText = [
+      `Echipe: ${body.home || "?"} vs ${body.away || "?"}`,
+      body.context ? `Context: ${body.context}` : null,
+      body.time ? `Ora: ${body.time}` : null,
+      body.venue ? `Locatie: ${body.venue}` : null,
+      body.city ? `Oras: ${body.city}` : null,
+      body.youtube ? `Link YouTube LIVE: ${body.youtube}` : null,
+    ].filter(Boolean).join("\n");
+  } else {
+    let matchData = body.matchData;
+    if (typeof matchData === "string") {
+      try { matchData = JSON.parse(matchData); }
+      catch { return json({ error: "JSON-ul lipit nu e valid. Re-ruleaza bookmarkletul si copiaza din nou." }); }
+    }
+    if (!matchData || !matchData.home)
+      return json({ error: "Lipsesc datele meciului. Ruleaza bookmarkletul si lipeste JSON-ul." });
+    system = POST_MATCH_SYSTEM;
+    userText =
+      `Context: ${body.context || "(fara context — deduce din competitie si scor)"}` +
+      (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
+      `\n\nDate meci (JSON):\n${JSON.stringify(matchData)}`;
+  }
+
+  // Call Claude with streaming enabled.
+  const upstream = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -183,71 +129,51 @@ async function callClaude(system, userText) {
     body: JSON.stringify({
       model: MODEL,
       max_tokens: 1500,
+      stream: true,
       system,
       messages: [{ role: "user", content: userText }],
     }),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    throw new Error(data?.error?.message || "Eroare la API-ul Claude.");
-  }
-  return data.content
-    .filter((b) => b.type === "text")
-    .map((b) => b.text)
-    .join("\n")
-    .trim();
-}
 
-// ---- Handler ------------------------------------------------------------------
-
-exports.handler = async (event) => {
-  if (event.httpMethod !== "POST") {
-    return { statusCode: 405, body: JSON.stringify({ error: "Method not allowed" }) };
-  }
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return { statusCode: 500, body: JSON.stringify({ error: "Lipseste ANTHROPIC_API_KEY in setarile Netlify." }) };
+  if (!upstream.ok || !upstream.body) {
+    const e = await upstream.json().catch(() => ({}));
+    return json({ error: e?.error?.message || "Eroare la API-ul Claude." });
   }
 
-  let body;
-  try {
-    body = JSON.parse(event.body || "{}");
-  } catch {
-    return { statusCode: 400, body: JSON.stringify({ error: "Cerere invalida." }) };
-  }
+  // Transform Anthropic SSE -> plain text stream of just the article words.
+  const reader = upstream.body.getReader();
+  const decoder = new TextDecoder();
+  const encoder = new TextEncoder();
 
-  try {
-    if (body.mode === "pre") {
-      const lines = [
-        `Echipe: ${body.home || "?"} vs ${body.away || "?"}`,
-        body.context ? `Context: ${body.context}` : null,
-        body.time ? `Ora: ${body.time}` : null,
-        body.venue ? `Locatie: ${body.venue}` : null,
-        body.city ? `Oras: ${body.city}` : null,
-        body.youtube ? `Link YouTube LIVE: ${body.youtube}` : null,
-      ].filter(Boolean);
-      const article = await callClaude(PRE_MATCH_SYSTEM, lines.join("\n"));
-      return { statusCode: 200, body: JSON.stringify({ article }) };
-    }
-
-    // default: post-match — match data arrives pre-scraped from the browser bookmarklet
-    let matchData = body.matchData;
-    if (typeof matchData === "string") {
+  const out = new ReadableStream({
+    async start(controller) {
+      let buf = "";
       try {
-        matchData = JSON.parse(matchData);
-      } catch {
-        return { statusCode: 200, body: JSON.stringify({ error: "JSON-ul lipit nu e valid. Re-ruleaza bookmarkletul si copiaza din nou." }) };
-      }
-    }
-    if (!matchData || !matchData.home) {
-      return { statusCode: 200, body: JSON.stringify({ error: "Lipsesc datele meciului. Ruleaza bookmarkletul pe pagina frhlive2 si lipeste JSON-ul." }) };
-    }
-    const userText =
-      `Context: ${body.context || "(fara context — deduce din competitie si scor)"}` +
-      (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
-      `\n\nDate meci (JSON):\n${JSON.stringify(matchData)}`;
-    const article = await callClaude(POST_MATCH_SYSTEM, userText);
-    return { statusCode: 200, body: JSON.stringify({ article, matchData }) };
-  } catch (err) {
-    return { statusCode: 200, body: JSON.stringify({ error: err.message || String(err) }) };
-  }
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl);
+            buf = buf.slice(nl + 1);
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (!payload) continue;
+            try {
+              const ev = JSON.parse(payload);
+              if (ev.type === "content_block_delta" && ev.delta?.type === "text_delta") {
+                controller.enqueue(encoder.encode(ev.delta.text));
+              }
+            } catch (_) { /* skip non-JSON keepalives */ }
+          }
+        }
+      } catch (_) { /* upstream closed */ }
+      controller.close();
+    },
+  });
+
+  return new Response(out, {
+    headers: { "content-type": "text/plain; charset=utf-8" },
+  });
 };
