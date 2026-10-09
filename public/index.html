@@ -119,6 +119,15 @@
   .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.3);
     border-top-color:var(--on-green);border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:8px}
   .status .spin{width:12px;height:12px;border-color:var(--line);border-top-color:var(--green)}
+  .copy:disabled{opacity:.45;cursor:wait}
+  .note{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13px;
+    background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--green)}
+  .note summary{cursor:pointer;font-weight:600;color:var(--green-text)}
+  .note ul{margin:8px 0 2px;padding-left:18px}
+  .note li{margin:4px 0;overflow-wrap:anywhere}
+  .note del{color:var(--muted)}
+  .note ins{text-decoration:none;font-weight:600;color:var(--green-text)}
+  .note .why{color:var(--muted)}
   @keyframes rot{to{transform:rotate(360deg)}}
   .foot{text-align:center;font-size:12px;color:var(--muted);margin-top:24px}
   .link{background:none;border:none;padding:0;color:var(--green-text);font:inherit;cursor:pointer;text-decoration:underline}
@@ -343,24 +352,48 @@ async function run(mode){
   }
 }
 
-// The server sends one JSON event per line: match → text… → done | error.
+function showCorrections(list){
+  const s=$('status');s.replaceChildren();
+  const box=el('div','note');
+  if(!list.length){
+    box.append(el('strong',null,'✓ Corectură automată: nicio greșeală găsită.'));
+  }else{
+    const d=document.createElement('details');
+    d.append(el('summary',null,'✓ Corectură automată: '+list.length+(list.length===1?' modificare':' modificări')+' (vezi)'));
+    const ul=el('ul');
+    for(const c of list){
+      const li=el('li');
+      li.append(el('del',null,c.original),' → ',el('ins',null,c.corrected));
+      if(c.reason)li.append(el('span','why',' — '+c.reason));
+      ul.append(li);
+    }
+    d.append(ul);box.append(d);
+  }
+  s.append(box);
+}
+
+// The server sends one JSON event per line:
+// match → text… → proof_start → proof | proof_error → done, or error before proof_start.
 async function readArticle(res,mode){
   $('scoreBox').replaceChildren();
   $('out').textContent='';
   const cp=$('copyBtn');cp.textContent='Copiază';cp.classList.remove('done');
+  cp.disabled=true; // nothing to copy until the corrected text is in
   setStatus('busy',mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
   $('result').classList.remove('hide');
   $('result').scrollIntoView({behavior:'smooth',block:'start'});
 
   const reader=res.body.getReader();
   const dec=new TextDecoder();
-  let buf='',text='',finished=false,error=null;
+  let buf='',text='',error=null,drafted=false,corrections=null,proofError=null;
   const handle=line=>{
     if(!line.trim())return;
     let ev;try{ev=JSON.parse(line);}catch(_){return;}
     if(ev.type==='match')renderScore(ev.match);
     else if(ev.type==='text'){text+=ev.text;$('out').textContent=text;}
-    else if(ev.type==='done')finished=true;
+    else if(ev.type==='proof_start'){drafted=true;setStatus('busy','Se verifică gramatica și exprimarea…');}
+    else if(ev.type==='proof'){text=ev.text;$('out').textContent=text;corrections=ev.corrections||[];}
+    else if(ev.type==='proof_error')proofError=ev.error;
     else if(ev.type==='error')error=ev.error;
   };
   try{
@@ -372,9 +405,16 @@ async function readArticle(res,mode){
       while((nl=buf.indexOf('\n'))>=0){handle(buf.slice(0,nl));buf=buf.slice(nl+1);}
     }
     handle(buf);
-  }catch(_){ /* connection dropped — treated as incomplete below */ }
+  }catch(_){ /* connection dropped — handled below */ }
+  cp.disabled=false;
 
-  if(finished&&!error){setStatus();return;}
+  if(corrections){showCorrections(corrections);return;}
+  if(drafted){
+    // The article itself is complete; only the proofreading did not finish.
+    setStatus('warn','⚠️ Corectura automată nu s-a încheiat ('+(proofError||'conexiunea s-a întrerupt')+
+      '). Textul e complet, dar necorectat — recitește-l înainte să-l postezi.');
+    return;
+  }
   if(!text){
     $('result').classList.add('hide');
     return showErr(error||'Conexiunea s-a întrerupt înainte să apară textul. Încearcă din nou.');

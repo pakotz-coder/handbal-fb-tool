@@ -1,14 +1,17 @@
 // generate.mjs — Netlify Function (v2, streaming)
-// Streams the article as NDJSON so the page can tell a finished article from a cut one.
+// Streams the article as NDJSON so the page can tell a finished article from a cut one,
+// then runs a proofreading pass that returns only the corrections to apply.
 // ANTHROPIC_API_KEY and ACCESS_PASSWORD live only here, as Netlify environment variables.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { betaJSONSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { parseMatchId, fetchMatch } from "../../lib/match.mjs";
 
 const MODEL = "claude-sonnet-5-5"; // swap to "claude-opus-5-5" for richer flavor (slower, ~2x price)
 const EFFORT = "medium";           // medium = more care with grammar and stats; "low" starts faster
 const MAX_TOKENS = 8000;           // article + thinking; also caps the cost of one request
+const PROOF_MAX_TOKENS = 6000;     // proofreading: thinking + a short list of corrections
 const MAX_BODY = 100_000;          // bytes; an old-bookmarklet JSON is ~12 KB
 const LIMITS = { context: 300, youtube: 300, home: 100, away: 100, time: 50, venue: 150, city: 100 };
 
@@ -98,6 +101,84 @@ Termină cu linia:
 
 Răspunde DOAR cu textul postării.`;
 
+const PROOF_SYSTEM = `Ești corector profesionist de limba română pentru postări sportive pe Facebook.
+
+Primești între etichetele <articol> un text deja scris. Găsește DOAR greșelile reale de limbă:
+- gramatică: acord (subiect–predicat, substantiv–adjectiv, gen), articulare, forme verbale, cratimă (s-a, n-a, într-un, i-au);
+- ortografie și diacritice (ș și ț cu virgulă dedesubt, nu cu sedilă);
+- punctuație greșită;
+- cuvinte inexistente, folosite cu alt sens sau calcuri stângace din engleză;
+- formulări nefirești sau ambigue pentru un vorbitor nativ.
+
+NU schimba nimic din:
+- stil, ton, umor, metafore, emoji-uri și expresiile ardelenești intenționate („Păi ce să zic”, „frate”, „Doamne ferește”);
+- cifre, scoruri, minute și procente;
+- numele jucătorilor și ale echipelor, scrise exact ca în text (chiar și fără diacritice);
+- structura textului și liniile de statistici de la final.
+
+Pentru fiecare greșeală:
+- original = fragmentul copiat EXACT din text, caracter cu caracter, suficient de lung cât să apară o singură dată (de obicei 3-8 cuvinte);
+- corrected = același fragment, corectat, cu cât mai puține schimbări;
+- reason = motivul, în câteva cuvinte.
+
+Nu propune rescrieri de gust, doar greșeli. Dacă textul nu are greșeli, întoarce o listă goală.`;
+
+const CORRECTIONS_FORMAT = betaJSONSchemaOutputFormat({
+  type: "object",
+  properties: {
+    corrections: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          original: { type: "string" },
+          corrected: { type: "string" },
+          reason: { type: "string" },
+        },
+        required: ["original", "corrected", "reason"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["corrections"],
+  additionalProperties: false,
+});
+
+// Applies only corrections that are safe: the original must occur exactly once,
+// and the digits must stay the same, so a correction can never change a statistic.
+function applyCorrections(text, corrections) {
+  const digits = (s) => (s.match(/\d+/g) || []).join(",");
+  const applied = [];
+  for (const c of corrections || []) {
+    const { original, corrected, reason } = c;
+    if (!original || original === corrected) continue;
+    if (digits(original) !== digits(corrected)) continue;
+    const at = text.indexOf(original);
+    if (at < 0 || text.indexOf(original, at + 1) >= 0) continue;
+    text = text.slice(0, at) + corrected + text.slice(at + original.length);
+    applied.push({ original, corrected, reason });
+  }
+  return { text, applied };
+}
+
+async function proofread(client, draft, signal) {
+  const msg = await client.beta.messages.parse(
+    {
+      model: MODEL,
+      max_tokens: PROOF_MAX_TOKENS,
+      output_config: { effort: "medium", format: CORRECTIONS_FORMAT },
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      system: PROOF_SYSTEM,
+      messages: [{ role: "user", content: `<articol>\n${draft}\n</articol>` }],
+    },
+    { signal },
+  );
+  if (msg.stop_reason !== "end_turn" || !msg.parsed_output)
+    throw new Error(`corectorul nu a răspuns complet (${msg.stop_reason})`);
+  return applyCorrections(draft, msg.parsed_output.corrections);
+}
+
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
@@ -120,7 +201,7 @@ function apiErrorMessage(e) {
   if (e instanceof Anthropic.InternalServerError || (e instanceof Anthropic.APIError && e.type === "overloaded_error"))
     return "Serverele Claude sunt suprasolicitate. Încearcă din nou peste un minut.";
   if (e instanceof Anthropic.APIConnectionError) return "Conexiunea cu Claude s-a întrerupt. Încearcă din nou.";
-  if (e instanceof Anthropic.APIError) return "Eroare Claude: " + e.message;
+  if (e instanceof Anthropic.APIError) return "Eroare Claude: " + (e.error?.error?.message || e.message);
   return "Eroare neașteptată: " + (e?.message || e);
 }
 
@@ -198,8 +279,10 @@ export default async (req) => {
     messages: [{ role: "user", content: userText }],
   });
 
-  // NDJSON events: match (post only) → text… → done | error.
+  // NDJSON events: match (post only) → text… → proof_start → proof | proof_error → done;
+  // or error at any point before proof_start.
   const encoder = new TextEncoder();
+  const proofAbort = new AbortController();
   const out = new ReadableStream({
     async start(controller) {
       // try/catch: after cancel() the controller is closed and enqueue would throw.
@@ -209,8 +292,10 @@ export default async (req) => {
           const { home, away, score, ht, competition, venue, city } = match;
           send({ type: "match", match: { home, away, score, ht, competition, venue, city } });
         }
+        let draft = "";
         for await (const ev of stream) {
           if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") {
+            draft += ev.delta.text;
             send({ type: "text", text: ev.delta.text });
           }
         }
@@ -220,6 +305,15 @@ export default async (req) => {
         } else if (final.stop_reason === "max_tokens") {
           send({ type: "error", error: "Articolul a atins limita de lungime și e tăiat la final." });
         } else {
+          // The draft is complete; a failed proofreading pass only means it stays uncorrected.
+          send({ type: "proof_start" });
+          try {
+            const { text, applied } = await proofread(client, draft, proofAbort.signal);
+            send({ type: "proof", text, corrections: applied });
+          } catch (e) {
+            if (e instanceof Anthropic.APIUserAbortError) return;
+            send({ type: "proof_error", error: e instanceof Anthropic.APIError ? apiErrorMessage(e) : e.message });
+          }
           send({ type: "done" });
         }
       } catch (e) {
@@ -229,7 +323,9 @@ export default async (req) => {
       try { controller.close(); } catch {}
     },
     cancel() {
-      stream.abort(); // the page was closed — stop paying for tokens nobody reads
+      // The page was closed — stop paying for tokens nobody reads.
+      stream.abort();
+      proofAbort.abort();
     },
   });
 

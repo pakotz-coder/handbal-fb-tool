@@ -29,8 +29,15 @@ netlify.toml                    → config (publică doar public/)
 Prima dată pagina cere parola de acces; după prima generare reușită rămâne salvată în browser
 („Schimbă parola” jos în pagină).
 
+Corectură automată: după ce articolul e scris, un al doilea apel Claude îl recitește și întoarce
+doar greșelile de gramatică și exprimare. Ele se aplică pe server, iar sub articol apare lista
+„Corectură automată: N modificări”. O corectură se aplică doar dacă fragmentul apare o singură
+dată în text și nu schimbă nicio cifră, deci statisticile nu pot fi atinse. „Copiază” devine
+activ abia după corectură.
+
 Dacă generarea se întrerupe (Claude suprasolicitat, conexiune căzută, limită de lungime), sub
-articol apare un avertisment galben: **nu posta textul fără să verifici finalul**.
+articol apare un avertisment galben: **nu posta textul fără să verifici finalul**. Dacă doar
+corectura eșuează, textul e complet, dar necorectat; avertismentul spune asta.
 
 Rezervă: dacă sportinfocentar ar bloca serverul Netlify, în câmpul „Link meci” se poate lipi și
 JSON-ul vechiului bookmarklet (textul care începe cu `{`).
@@ -43,6 +50,8 @@ JSON-ul vechiului bookmarklet (textul care începe cu `{`).
   (mai lent, cam de 2× mai scump).
 - `EFFORT = "medium"` — mai multă grijă la gramatică și statistici; `"low"` pornește mai repede.
 - `MAX_TOKENS = 8000` — plafonează și costul maxim al unei cereri.
+- `PROOF_MAX_TOKENS = 6000` — plafonul pentru corectură (gândire + lista de corecturi).
+  Corectura adaugă cam 5-10 secunde și ~1 cent pe articol.
 - Fallback automat: dacă filtrele de siguranță ar refuza o cerere (n-ar trebui, la handbal),
   API-ul o reîncearcă singur pe modelul recomandat de Anthropic.
 
