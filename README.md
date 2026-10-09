@@ -41,7 +41,7 @@ JSON-ul vechiului bookmarklet (textul care începe cu `{`).
 În `generate.mjs`, sus:
 - `MODEL = "claude-sonnet-5-5"` — schimbă în `"claude-opus-5-5"` pentru savoare mai bogată
   (mai lent, cam de 2× mai scump).
-- `EFFORT = "low"` — textul pornește repede; `"medium"` dacă vrei mai multă grijă la statistici.
+- `EFFORT = "medium"` — mai multă grijă la gramatică și statistici; `"low"` pornește mai repede.
 - `MAX_TOKENS = 8000` — plafonează și costul maxim al unei cereri.
 - Fallback automat: dacă filtrele de siguranță ar refuza o cerere (n-ar trebui, la handbal),
   API-ul o reîncearcă singur pe modelul recomandat de Anthropic.
