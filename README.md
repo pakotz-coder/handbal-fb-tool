@@ -7,6 +7,9 @@ pe server, de pe sportinfocentar2.com; cheia API și parola de acces stau doar �
 ```
 public/index.html               → interfața (după meci / înainte de meci, temă luminoasă/întunecată)
 netlify/functions/generate.mjs  → verifică parola, ia datele meciului, apelează Claude (streaming)
+lib/prompts-ro.mjs              → prompturile în română (articol, teaser, corector)
+lib/prompts-hu.mjs              → prompturile în maghiară (aceeași structură)
+lib/places-hu.mjs               → nume maghiare ale orașelor (listă verificată manual, în repo)
 lib/match.mjs                   → descarcă și rezumă meciul de pe sportinfocentar2
 lib/loose.mjs                   → parser pentru fișierele .js ale sursei (fără eval)
 netlify.toml                    → config (publică doar public/)
@@ -43,6 +46,21 @@ Rezervă: dacă sportinfocentar ar bloca serverul Netlify, în câmpul „Link m
 JSON-ul vechiului bookmarklet (textul care începe cu `{`).
 
 Înainte de meci: tab-ul al doilea, doar nume echipe + context + oră + locație + link.
+
+## Limbi: română, maghiară sau ambele
+Sus în pagină, „Limba postării”: **Română**, **Magyar** sau **Ambele**. La „Ambele” pagina trimite
+două cereri în paralel (fiecare cu corectura ei) și afișează două carduri, fiecare cu „Copiază”.
+Costul se dublează. Interfața rămâne în română; contextul se poate scrie tot în română.
+
+- Prompturile maghiare (`lib/prompts-hu.mjs`) au aceeași structură și aceleași reguli ca cele
+  românești: ton cald cu tentă ardelenească discretă, glosar de handbal (gólpassz, labdaszerzés,
+  kiállítás, védés), corector propriu în maghiară.
+- **Orașe:** numele maghiare vin doar din `lib/places-hu.mjs` — o listă scrisă manual pentru
+  Transilvania, Banat, Crișana, Maramureș și București (Bukarest). Restul localităților rămân cu
+  numele oficial românesc (Ploiești, Craiova). Pentru un oraș nou se adaugă o linie în listă.
+- **Jucătoarele** rămân cu numele exact ca în date (prenume întâi), iar echipele cu numele oficial.
+- Literele greșite care seamănă cu cele corecte se repară automat pe server: ş/ţ (sedilă) → ș/ț
+  în română, õ/û → ő/ű în maghiară. Excepție: litera apare chiar în datele meciului (un nume străin).
 
 ## Model
 În `generate.mjs`, sus:

@@ -120,6 +120,14 @@
     border-top-color:var(--on-green);border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:8px}
   .status .spin{width:12px;height:12px;border-color:var(--line);border-top-color:var(--green)}
   .copy:disabled{opacity:.45;cursor:wait}
+  .langrow{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+  .lbl{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:600}
+  .seg{display:flex;gap:3px;padding:3px;background:var(--panel);border:1px solid var(--line);border-radius:9px}
+  .seg button{border:none;background:none;color:var(--muted);padding:7px 14px;border-radius:7px;
+    font:600 13px 'Inter',system-ui,sans-serif;cursor:pointer;transition:.15s}
+  .seg button:hover{color:var(--text)}
+  .seg button[aria-pressed="true"]{background:var(--green-dim);color:#fff}
+  #scoreCard .sub{margin-bottom:0}
   .note{margin-top:10px;padding:10px 14px;border-radius:8px;font-size:13px;
     background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--green)}
   .note summary{cursor:pointer;font-weight:600;color:var(--green-text)}
@@ -154,6 +162,15 @@
     <label for="pass">Parolă de acces</label>
     <input id="pass" type="password" autocomplete="current-password" placeholder="Parola setată în Netlify (ACCESS_PASSWORD)">
     <div class="hint">Se verifică la prima generare, apoi rămâne salvată pe acest dispozitiv.</div>
+  </div>
+
+  <div class="langrow">
+    <span class="lbl" id="langLbl">Limba postării</span>
+    <div class="seg" id="langSeg" role="group" aria-labelledby="langLbl">
+      <button type="button" data-lang="ro">Română</button>
+      <button type="button" data-lang="hu">Magyar</button>
+      <button type="button" data-lang="both">Ambele</button>
+    </div>
   </div>
 
   <div class="tabs">
@@ -208,18 +225,19 @@
 
   <div id="errBox"></div>
 
-  <!-- RESULT -->
-  <div id="result" class="hide">
+  <!-- RESULT: score once, then one card per language -->
+  <div id="scoreCard" class="card hide"><div id="scoreBox"></div></div>
+  <div id="results"></div>
+  <template id="resultTpl">
     <div class="card">
-      <div id="scoreBox"></div>
       <div class="outbar">
-        <h3>Postare</h3>
-        <button class="copy" id="copyBtn" onclick="copyOut()">Copiază</button>
+        <h3></h3>
+        <button class="copy" type="button">Copiază</button>
       </div>
-      <div class="out" id="out"></div>
-      <div id="status"></div>
+      <div class="out"></div>
+      <div class="stat"></div>
     </div>
-  </div>
+  </template>
 
   <div class="foot hide" id="passSaved">
     🔒 Parola de acces e salvată pe acest dispozitiv · <button class="link" onclick="forgetPass()">Schimbă parola</button>
@@ -234,7 +252,7 @@ const CONTEXT_CHIPS = [
   "al 3-lea meci turneu final",
   "meci amical, fără miză"
 ];
-const KEY_PASS='hlbv-pass', KEY_THEME='hlbv-theme';
+const KEY_PASS='hlbv-pass', KEY_THEME='hlbv-theme', KEY_LANG='hlbv-lang';
 
 const $=id=>document.getElementById(id);
 function load(k){try{return localStorage.getItem(k);}catch(e){return null;}}
@@ -270,6 +288,18 @@ function forgetPass(){
 }
 showAccess(!PASS);
 
+// ---- post language: ro | hu | both ----
+const LANG_TITLE={ro:'Postare în română',hu:'Postare în maghiară'};
+let LANG=['ro','hu','both'].includes(load(KEY_LANG))?load(KEY_LANG):'ro';
+function setLang(l){
+  LANG=l;store(KEY_LANG,l);
+  document.querySelectorAll('#langSeg button').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.lang===l)));
+  $('goPost').textContent=l==='both'?'Generează articolele (RO + HU)':'Generează articol';
+  $('goPre').textContent=l==='both'?'Generează teaserele (RO + HU)':'Generează teaser';
+}
+document.querySelectorAll('#langSeg button').forEach(b=>b.onclick=()=>setLang(b.dataset.lang));
+setLang(LANG);
+
 // ---- form ----
 CONTEXT_CHIPS.forEach(c=>{
   const b=document.createElement('button');b.type='button';b.className='chip';b.textContent=c;
@@ -289,10 +319,11 @@ function val(id){return $(id).value.trim();}
 function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
 function showErr(msg){$('errBox').replaceChildren(el('div','err',msg));}
 function clearErr(){$('errBox').replaceChildren();}
-function setStatus(kind,msg){
-  const s=$('status');s.replaceChildren();
-  if(kind==='busy'){const d=el('div','status');d.append(el('span','spin'),msg);s.append(d);}
-  else if(kind==='warn'){s.append(el('div','warn',msg));}
+function setStatus(card,kind,msg){
+  card.stat.replaceChildren();
+  if(kind==='busy'){const d=el('div','status');d.append(el('span','spin'),msg);card.stat.append(d);}
+  else if(kind==='warn'){card.stat.append(el('div','warn',msg));}
+  else if(kind==='err'){card.stat.append(el('div','err',msg));}
 }
 
 function renderScore(m){
@@ -302,6 +333,7 @@ function renderScore(m){
   const place=[m.venue,m.city].filter(Boolean).join(' ');
   const sub=[m.competition,place,m.ht?'pauză '+m.ht:''].filter(Boolean).join(' · ');
   sb.append(row,el('div','sub',sub));
+  $('scoreCard').classList.remove('hide');
 }
 
 function buildPayload(mode){
@@ -318,18 +350,41 @@ function buildPayload(mode){
   return p;
 }
 
+// One result card per language, built from <template id="resultTpl">.
+function makeCard(lang){
+  const root=$('resultTpl').content.firstElementChild.cloneNode(true);
+  const card={lang,root,out:root.querySelector('.out'),stat:root.querySelector('.stat'),copy:root.querySelector('.copy')};
+  root.querySelector('h3').textContent=LANG_TITLE[lang];
+  card.out.lang=lang;
+  card.copy.onclick=()=>copyOut(card);
+  $('results').append(root);
+  return card;
+}
+
 async function run(mode){
   clearErr();
-  $('result').classList.add('hide');
+  $('results').replaceChildren();
+  $('scoreCard').classList.add('hide');
   if(val('pass'))PASS=val('pass');
   if(!PASS){showAccess(true);$('pass').focus();return showErr('Introdu parola de acces.');}
 
   let payload;
   try{payload=buildPayload(mode);}catch(e){return showErr(e.message);}
 
+  const langs=LANG==='both'?['ro','hu']:[LANG];
   const btn=$(mode==='post'?'goPost':'goPre');
   const label=btn.textContent;
   btn.disabled=true;btn.replaceChildren(el('span','spin'),'Se generează…');
+  const cards=langs.map(makeCard);
+  cards[0].root.scrollIntoView({behavior:'smooth',block:'start'});
+  // In parallel: each language is its own request, so each stays well within the function's time limit.
+  await Promise.all(cards.map(card=>generateOne({...payload,lang:card.lang},mode,card)));
+  btn.disabled=false;btn.textContent=label;
+}
+
+async function generateOne(payload,mode,card){
+  setStatus(card,'busy','Se conectează…');
+  card.copy.disabled=true;
   try{
     const res=await fetch('/.netlify/functions/generate',{
       method:'POST',
@@ -340,20 +395,22 @@ async function run(mode){
     if(!res.ok||!ct.includes('ndjson')){
       let data={};try{data=await res.json();}catch(_){}
       if(res.status===401){PASS='';store(KEY_PASS,null);$('pass').value='';showAccess(true);$('pass').focus();}
+      // Errors before any text (password, bad link, missing match) are the same for every language: show once, on top.
+      card.root.remove();
       return showErr(data.error||('Eroare de server ('+res.status+'). Încearcă din nou.'));
     }
     // Parola a trecut: o păstrăm.
     store(KEY_PASS,PASS);$('pass').value='';showAccess(false);
-    await readArticle(res,mode);
+    await readArticle(res,mode,card);
   }catch(e){
-    showErr('Conexiune eșuată: '+e.message);
+    setStatus(card,'err','Conexiune eșuată: '+e.message);
   }finally{
-    btn.disabled=false;btn.textContent=label;
+    card.copy.disabled=false;
   }
 }
 
-function showCorrections(list){
-  const s=$('status');s.replaceChildren();
+function showCorrections(card,list){
+  card.stat.replaceChildren();
   const box=el('div','note');
   if(!list.length){
     box.append(el('strong',null,'✓ Corectură automată: nicio greșeală găsită.'));
@@ -369,19 +426,15 @@ function showCorrections(list){
     }
     d.append(ul);box.append(d);
   }
-  s.append(box);
+  card.stat.append(box);
 }
 
 // The server sends one JSON event per line:
 // match → text… → proof_start → proof | proof_error → done, or error before proof_start.
-async function readArticle(res,mode){
-  $('scoreBox').replaceChildren();
-  $('out').textContent='';
-  const cp=$('copyBtn');cp.textContent='Copiază';cp.classList.remove('done');
-  cp.disabled=true; // nothing to copy until the corrected text is in
-  setStatus('busy',mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
-  $('result').classList.remove('hide');
-  $('result').scrollIntoView({behavior:'smooth',block:'start'});
+async function readArticle(res,mode,card){
+  card.out.textContent='';
+  card.copy.textContent='Copiază';card.copy.classList.remove('done');
+  setStatus(card,'busy',mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
 
   const reader=res.body.getReader();
   const dec=new TextDecoder();
@@ -390,9 +443,9 @@ async function readArticle(res,mode){
     if(!line.trim())return;
     let ev;try{ev=JSON.parse(line);}catch(_){return;}
     if(ev.type==='match')renderScore(ev.match);
-    else if(ev.type==='text'){text+=ev.text;$('out').textContent=text;}
-    else if(ev.type==='proof_start'){drafted=true;setStatus('busy','Se verifică gramatica și exprimarea…');}
-    else if(ev.type==='proof'){text=ev.text;$('out').textContent=text;corrections=ev.corrections||[];}
+    else if(ev.type==='text'){text+=ev.text;card.out.textContent=text;}
+    else if(ev.type==='proof_start'){drafted=true;setStatus(card,'busy','Se verifică gramatica și exprimarea…');}
+    else if(ev.type==='proof'){text=ev.text;card.out.textContent=text;corrections=ev.corrections||[];}
     else if(ev.type==='proof_error')proofError=ev.error;
     else if(ev.type==='error')error=ev.error;
   };
@@ -406,30 +459,28 @@ async function readArticle(res,mode){
     }
     handle(buf);
   }catch(_){ /* connection dropped — handled below */ }
-  cp.disabled=false;
 
-  if(corrections){showCorrections(corrections);return;}
+  if(corrections){showCorrections(card,corrections);return;}
   if(drafted){
     // The article itself is complete; only the proofreading did not finish.
-    setStatus('warn','⚠️ Corectura automată nu s-a încheiat ('+(proofError||'conexiunea s-a întrerupt')+
+    setStatus(card,'warn','⚠️ Corectura automată nu s-a încheiat ('+(proofError||'conexiunea s-a întrerupt')+
       '). Textul e complet, dar necorectat — recitește-l înainte să-l postezi.');
     return;
   }
   if(!text){
-    $('result').classList.add('hide');
-    return showErr(error||'Conexiunea s-a întrerupt înainte să apară textul. Încearcă din nou.');
+    card.out.classList.add('hide');
+    return setStatus(card,'err',error||'Conexiunea s-a întrerupt înainte să apară textul. Încearcă din nou.');
   }
-  setStatus('warn','⚠️ Articolul NU e complet: '+(error||'conexiunea s-a întrerupt în timpul generării.')+
+  setStatus(card,'warn','⚠️ Articolul NU e complet: '+(error||'conexiunea s-a întrerupt în timpul generării.')+
     ' Verifică finalul înainte să-l postezi sau generează din nou.');
 }
 
-function copyOut(){
-  const t=$('out').textContent;
-  navigator.clipboard.writeText(t).then(()=>{
-    const b=$('copyBtn');b.textContent='Copiat ✓';b.classList.add('done');
-    setTimeout(()=>{b.textContent='Copiază';b.classList.remove('done');},2000);
+function copyOut(card){
+  navigator.clipboard.writeText(card.out.textContent).then(()=>{
+    card.copy.textContent='Copiat ✓';card.copy.classList.add('done');
+    setTimeout(()=>{card.copy.textContent='Copiază';card.copy.classList.remove('done');},2000);
   }).catch(()=>{
-    const r=document.createRange();r.selectNodeContents($('out'));
+    const r=document.createRange();r.selectNodeContents(card.out);
     const s=getSelection();s.removeAllRanges();s.addRange(r);
     showErr('Nu am putut copia automat — textul e selectat, apasă Ctrl+C.');
   });

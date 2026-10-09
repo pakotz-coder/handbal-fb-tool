@@ -7,6 +7,9 @@ import Anthropic from "@anthropic-ai/sdk";
 import { betaJSONSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/beta/json-schema";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { parseMatchId, fetchMatch } from "../../lib/match.mjs";
+import { huPlaceNames } from "../../lib/places-hu.mjs";
+import { RO } from "../../lib/prompts-ro.mjs";
+import { HU } from "../../lib/prompts-hu.mjs";
 
 const MODEL = "claude-sonnet-5-5"; // swap to "claude-opus-5-5" for richer flavor (slower, ~2x price)
 const EFFORT = "medium";           // medium = more care with grammar and stats; "low" starts faster
@@ -15,113 +18,27 @@ const PROOF_MAX_TOKENS = 6000;     // proofreading: thinking + a short list of c
 const MAX_BODY = 100_000;          // bytes; an old-bookmarklet JSON is ~12 KB
 const LIMITS = { context: 300, youtube: 300, home: 100, away: 100, time: 50, venue: 150, city: 100 };
 
-// Shared by both prompts. The prompts themselves are written with diacritics on purpose:
-// the model mirrors the prompt's spelling.
-const LANGUAGE_RULES = `LIMBA
-- EXCLUSIV în limba română (fără mix bilingv), cu toate diacriticele: ă, â, î, ș, ț (ș și ț cu virgulă dedesubt, nu cu sedilă).
-- Română literară corectă: acord gramatical (subiect–predicat, substantiv–adjectiv, genul echipei), articulare corectă, cratimă (s-a, n-a, într-un, le-a, i-au), „să” față de „sa”, „o dată” față de „odată”, „decât” doar cu negație. Fără anacoluturi și fără repetiții supărătoare.
-- Exprimare naturală, ca a unui vorbitor nativ: fără calcuri din engleză, fără cuvinte inventate sau folosite cu alt sens.
-- Fiecare frază trebuie să fie corectă gramatical și să sune firesc; dacă o formulare e nesigură, alege una simplă și corectă.`;
+const PROMPTS = { ro: RO, hu: HU };
 
-const POST_MATCH_SYSTEM = `Ești un jurnalist sportiv de top, imparțial, cu savoare ardelenească, care scrie articole pentru Facebook despre meciuri de handbal.
+// Look-alike letters the model occasionally writes: cedilla ş/ţ instead of comma ș/ț (RO),
+// õ/û instead of double-acute ő/ű (HU). A letter that appears in the source data
+// (e.g. a foreign player's name) is left alone, so names are never altered.
+const LOOKALIKES = {
+  ro: [["ş", "ș"], ["Ş", "Ș"], ["ţ", "ț"], ["Ţ", "Ț"]],
+  hu: [["õ", "ő"], ["Õ", "Ő"], ["û", "ű"], ["Û", "Ű"]],
+};
+function letterFixer(lang, source) {
+  const pairs = LOOKALIKES[lang].filter(([bad]) => !source.includes(bad));
+  return (s) => pairs.reduce((t, [bad, good]) => t.split(bad).join(good), s);
+}
 
-VOCE
-- Jurnalist profesionist, dar cald, spiritual și uneori amuzant. Personalitate în fiecare paragraf, niciodată fad sau generic.
-- Corect cu ambele echipe, chiar și la scoruri categorice — recunoaște efortul învinsei.
-
-${LANGUAGE_RULES}
-- Tușe de dialect ardelenesc presărate NATURAL: „Păi ce să zic”, „frate”, „Doamne ferește”, „de le-a mers vorba”, metafore cu mâncare și cu natura ardelenească. Dialectul stă în expresii, nu în greșeli de limbă. Natural, nu caricatural.
-
-TERMINOLOGIE (câmpurile din JSON)
-- goals = goluri; attempts = aruncări; eficiența = goluri / aruncări, în procente.
-- assists = pase decisive (niciodată „assisturi”); steals = mingi recuperate; sus = eliminări de 2 minute.
-- La portari: saves = parade; faced = aruncări pe poartă (ex.: „10 parade din 19 aruncări”).
-- val = indicele de valoare al jucătorului din statistici; folosește-l doar ca să alegi MVP-ul, nu-l cita în text.
-- goals[] = golurile, de la ultimul spre primul: min = minutul, team 1 = gazdele, team 2 = oaspeții, r1-r2 = scorul după gol.
-- Numele câmpurilor (val, sus, steals etc.) nu apar niciodată în text; scrie doar termenii românești de mai sus.
-
-UMOR
-- Cald, niciodată batjocoritor. Comparații absurde, clișee sportive folosite jucăuș, observații amuzante despre statistici.
-
-STRUCTURĂ (țintă 300-400 de cuvinte, fără header/footer)
-1. Header — emoji + scor + echipe, subtitlu competiție/locație
-2. Hook de deschidere — 2-3 fraze cu energie potrivită contextului
-3. Narațiunea primei reprize — scorul la pauză, cine a dominat
-4. Vedetele echipei câștigătoare — top 2-3 marcatori, cu statistici și personalitate
-5. Restul lotului — adâncimea echipei
-6. Aprecieri pentru învinsă — cei mai buni jucători ai lor, ton respectuos
-7. Comparație între portari — scurt, dacă e relevant
-8. Rezumatul reprizei a doua — scurt
-9. Reflecție de încheiere — final emoțional
-10. Footer cu statistici — scor, scor la pauză, locație, MVP
-
-REGULI
-1. Folosește DOAR informațiile din JSON și din context — nu inventa niciodată statistici, puncte în clasament, istoric sau declarații.
-   Data meciului nu e în date: nu scrie „azi”, „aseară” sau „ieri” decât dacă reiese din context.
-2. Numele jucătorilor rămân exact cum sunt în date. La echipele, orașele și sălile românești adaugă doar diacriticele care lipsesc din date (Brasov → Brașov, Targu Mures → Târgu Mureș, Stiinta → Știința, Bucuresti → București), fără alte schimbări.
-3. Calculează eficiența din goluri/aruncări când evidențiezi un jucător.
-4. Statistici de portar doar când sunt notabile.
-5. 300-400 de cuvinte (fără header/footer).
-6. Termină mereu cu footer-ul de statistici.
-7. Dacă există link YouTube: „🎥 Revedere integrală: [link]” la final.
-
-ADAPTĂRI DUPĂ CONTEXT
-- Finală/titlu: încoronare, trofeu, moștenire, 🏆, „campioane/campioni”.
-- Semifinală: tensiune, miză, „drumul spre finală”.
-- Sezon regulat: tactic/analitic, umor observațional.
-- Amical: cel mai lejer ton, momente individuale.
-- Diferență mare (10+): dominanță onestă, dar respectuoasă; ceva pozitiv la învinsă.
-- Meci strâns (1-3): tensiune maximă, secvențe-cheie, momentum.
-
-GEN GRAMATICAL
-- „Junioare/Fete/Senioare/Liga Florilor” → feminin („campioane”, „fetele”); „Zimbrilor/Juniori/Seniori” → masculin. Folosește genul corect peste tot.
-
-Răspunde DOAR cu textul postării, gata de copiat pe Facebook. Fără comentarii, fără ghilimele în jurul textului.`;
-
-const PRE_MATCH_SYSTEM = `Ești un creator de conținut sportiv ardelenesc care scrie teasere PRE-MECI scurte pentru Facebook, despre handbal.
-
-STIL
-- Savoare ardelenească — cald, entuziast, ca și cum îți chemi prietenii la meci.
-- MAXIM 50-80 de cuvinte.
-- Entuziasm potrivit contextului (finală > semifinală > sezon regulat).
-- Adresare familiară („frate”, „hai că...”).
-- Metafore cu mâncare/băutură binevenite.
-- Linkul YouTube vine natural, la final.
-
-${LANGUAGE_RULES}
-- La echipele, orașele și sălile românești adaugă diacriticele care lipsesc (Brasov → Brașov, Bistrita → Bistrița).
-
-STRUCTURĂ
-[Emoji] Hook cu energie (1-2 fraze)
-Info meci: echipe, context (1-2 fraze)
-Ora + locația (1 frază)
-Apel la acțiune
-Termină cu linia:
-🔴 LIVE: [link YouTube]
-
-Răspunde DOAR cu textul postării.`;
-
-const PROOF_SYSTEM = `Ești corector profesionist de limba română pentru postări sportive pe Facebook.
-
-Primești între etichetele <articol> un text deja scris. Găsește DOAR greșelile reale de limbă:
-- gramatică: acord (subiect–predicat, substantiv–adjectiv, gen), articulare, forme verbale, cratimă (s-a, n-a, într-un, i-au);
-- ortografie și diacritice (ș și ț cu virgulă dedesubt, nu cu sedilă);
-- punctuație greșită;
-- cuvinte inexistente, folosite cu alt sens sau calcuri stângace din engleză;
-- formulări nefirești sau ambigue pentru un vorbitor nativ.
-
-NU schimba nimic din:
-- stil, ton, umor, metafore, emoji-uri și expresiile ardelenești intenționate („Păi ce să zic”, „frate”, „Doamne ferește”);
-- cifre, scoruri, minute și procente;
-- numele jucătorilor și ale echipelor, scrise exact ca în text (chiar și fără diacritice);
-- structura textului și liniile de statistici de la final.
-
-Pentru fiecare greșeală:
-- original = fragmentul copiat EXACT din text, caracter cu caracter, suficient de lung cât să apară o singură dată (de obicei 3-8 cuvinte);
-- corrected = același fragment, corectat, cu cât mai puține schimbări;
-- reason = motivul, în câteva cuvinte.
-
-Nu propune rescrieri de gust, doar greșeli. Dacă textul nu are greșeli, întoarce o listă goală.`;
+// Hungarian names only for the localities that appear in this request (lib/places-hu.mjs).
+function huPlaceLine(texts) {
+  const places = huPlaceNames(texts);
+  return places.length
+    ? `Magyar helységnevek (csak ezeket használd): ${places.map((p) => `${p.ro} = ${p.hu}`).join("; ")}`
+    : "Magyar helységnevek: nincs ilyen — minden település a hivatalos román nevén szerepeljen.";
+}
 
 const CORRECTIONS_FORMAT = betaJSONSchemaOutputFormat({
   type: "object",
@@ -161,7 +78,7 @@ function applyCorrections(text, corrections) {
   return { text, applied };
 }
 
-async function proofread(client, draft, signal) {
+async function proofread(client, draft, lang, signal) {
   const msg = await client.beta.messages.parse(
     {
       model: MODEL,
@@ -169,7 +86,7 @@ async function proofread(client, draft, signal) {
       output_config: { effort: "medium", format: CORRECTIONS_FORMAT },
       betas: ["server-side-fallback-2026-07-01"],
       fallbacks: "default",
-      system: PROOF_SYSTEM,
+      system: PROMPTS[lang].proof,
       messages: [{ role: "user", content: `<articol>\n${draft}\n</articol>` }],
     },
     { signal },
@@ -230,18 +147,33 @@ export default async (req) => {
       return json({ error: `Câmpul „${field}” e prea lung (max ${max} caractere).` }, 400);
   }
 
+  if (body.lang != null && !Object.hasOwn(PROMPTS, body.lang)) return json({ error: "Limbă necunoscută." }, 400);
+  const lang = body.lang || "ro";
+  const hu = lang === "hu";
+
   let system, userText, match = null;
 
   if (body.mode === "pre") {
-    system = PRE_MATCH_SYSTEM;
-    userText = [
-      `Echipe: ${body.home || "?"} vs ${body.away || "?"}`,
-      body.context ? `Context: ${body.context}` : null,
-      body.time ? `Ora: ${body.time}` : null,
-      body.venue ? `Locație: ${body.venue}` : null,
-      body.city ? `Oraș: ${body.city}` : null,
-      body.youtube ? `Link YouTube LIVE: ${body.youtube}` : null,
-    ].filter(Boolean).join("\n");
+    system = PROMPTS[lang].pre;
+    userText = (hu
+      ? [
+          `Csapatok: ${body.home || "?"} – ${body.away || "?"}`,
+          body.context ? `Kontextus (a felhasználó románul is írhatta): ${body.context}` : null,
+          body.time ? `Időpont: ${body.time}` : null,
+          body.venue ? `Helyszín: ${body.venue}` : null,
+          body.city ? `Város: ${body.city}` : null,
+          body.youtube ? `ÉLŐ YouTube-link: ${body.youtube}` : null,
+          huPlaceLine([body.home, body.away, body.venue, body.city]),
+        ]
+      : [
+          `Echipe: ${body.home || "?"} vs ${body.away || "?"}`,
+          body.context ? `Context: ${body.context}` : null,
+          body.time ? `Ora: ${body.time}` : null,
+          body.venue ? `Locație: ${body.venue}` : null,
+          body.city ? `Oraș: ${body.city}` : null,
+          body.youtube ? `Link YouTube LIVE: ${body.youtube}` : null,
+        ]
+    ).filter(Boolean).join("\n");
   } else {
     if (body.matchData) {
       // Rezerva: JSON lipit de la vechiul bookmarklet.
@@ -260,12 +192,17 @@ export default async (req) => {
         return json({ error: e.message }, 502);
       }
     }
-    system = POST_MATCH_SYSTEM;
-    userText =
-      `Context: ${body.context || "(fără context — deduce din competiție și scor)"}` +
-      (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
-      `\n\nDate meci (JSON):\n${JSON.stringify(match)}`;
+    system = PROMPTS[lang].post;
+    userText = hu
+      ? `Kontextus (a felhasználó románul is írhatta): ${body.context || "(nincs megadva — következtesd ki a bajnokságból és az eredményből)"}` +
+        (body.youtube ? `\nYouTube-visszajátszás: ${body.youtube}` : "") +
+        `\n${huPlaceLine([match.home, match.away, match.venue, match.city])}` +
+        `\n\nA mérkőzés adatai (JSON):\n${JSON.stringify(match)}`
+      : `Context: ${body.context || "(fără context — deduce din competiție și scor)"}` +
+        (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
+        `\n\nDate meci (JSON):\n${JSON.stringify(match)}`;
   }
+  const fixLetters = letterFixer(lang, userText);
 
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY; retries 429/5xx before the stream opens
   const stream = client.beta.messages.stream({
@@ -295,8 +232,9 @@ export default async (req) => {
         let draft = "";
         for await (const ev of stream) {
           if (ev.type === "content_block_delta" && ev.delta.type === "text_delta") {
-            draft += ev.delta.text;
-            send({ type: "text", text: ev.delta.text });
+            const text = fixLetters(ev.delta.text);
+            draft += text;
+            send({ type: "text", text });
           }
         }
         const final = await stream.finalMessage();
@@ -308,8 +246,8 @@ export default async (req) => {
           // The draft is complete; a failed proofreading pass only means it stays uncorrected.
           send({ type: "proof_start" });
           try {
-            const { text, applied } = await proofread(client, draft, proofAbort.signal);
-            send({ type: "proof", text, corrections: applied });
+            const { text, applied } = await proofread(client, draft, lang, proofAbort.signal);
+            send({ type: "proof", text: fixLetters(text), corrections: applied });
           } catch (e) {
             if (e instanceof Anthropic.APIUserAbortError) return;
             send({ type: "proof_error", error: e instanceof Anthropic.APIError ? apiErrorMessage(e) : e.message });
