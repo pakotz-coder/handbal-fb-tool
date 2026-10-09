@@ -1,0 +1,399 @@
+<!DOCTYPE html>
+<html lang="ro" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>HandbaLiveBV — Generator postări</title>
+<script>
+  // Theme before first paint: saved choice, else the system setting.
+  (function(){
+    var t=null;try{t=localStorage.getItem('hlbv-theme');}catch(e){}
+    if(t!=='light'&&t!=='dark')t=matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';
+    document.documentElement.setAttribute('data-theme',t);
+  })();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    color-scheme:dark;
+    --bg:#0c1410;        /* deep court green-black */
+    --panel:#13201a;
+    --panel2:#1a2c24;
+    --line:#274536;
+    --green:#16c060;     /* court line green */
+    --green-hover:#1ad46c;
+    --green-dim:#0f7a3e;
+    --green-text:#16c060;
+    --on-green:#04140a;
+    --live:#ff3b30;      /* broadcast live red */
+    --text:#e8f1ec;
+    --muted:#8aa79a;
+    --field:#0f1a15;
+    --err-bg:#2a1412;--err-line:#5a2420;--err-text:#ff8a80;
+    --warn-bg:#2a2410;--warn-line:#5a4a1a;--warn-text:#ffd27a;
+  }
+  :root[data-theme="light"]{
+    color-scheme:light;
+    --bg:#eef3f0;
+    --panel:#ffffff;
+    --panel2:#e6efe9;
+    --line:#cddcd3;
+    --green:#12a150;
+    --green-hover:#0f8c45;
+    --green-dim:#0f7a3e;
+    --green-text:#0b7a3b;
+    --on-green:#04140a;
+    --live:#e0352b;
+    --text:#0f1f18;
+    --muted:#55695f;
+    --field:#f6faf7;
+    --err-bg:#fdecea;--err-line:#f1b9b3;--err-text:#a1271d;
+    --warn-bg:#fff6e0;--warn-line:#f0d58a;--warn-text:#7a5a00;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:760px;margin:0 auto;padding:24px 16px 60px}
+  header{display:flex;align-items:center;gap:12px;margin:8px 0 22px}
+  .dot{flex:none;width:11px;height:11px;border-radius:50%;background:var(--live);
+    box-shadow:0 0 0 0 rgba(255,59,48,.7);animation:pulse 1.8s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,59,48,.6)}70%{box-shadow:0 0 0 9px rgba(255,59,48,0)}100%{box-shadow:0 0 0 0 rgba(255,59,48,0)}}
+  h1{font-family:'Barlow Condensed',sans-serif;font-weight:700;letter-spacing:.5px;
+    text-transform:uppercase;font-size:26px;margin:0}
+  h1 span{color:var(--green-text)}
+  .theme{margin-left:auto;flex:none;width:38px;height:38px;display:grid;place-items:center;
+    background:var(--panel);border:1px solid var(--line);border-radius:9px;color:var(--text);cursor:pointer;transition:.15s}
+  .theme:hover{border-color:var(--green)}
+  .theme svg{width:18px;height:18px}
+  [data-theme="dark"] .i-moon,[data-theme="light"] .i-sun{display:none}
+  .tabs{display:flex;gap:6px;margin-bottom:18px}
+  .tab{flex:1;padding:11px;background:var(--panel);border:1px solid var(--line);
+    color:var(--muted);font-family:'Barlow Condensed',sans-serif;font-weight:600;
+    text-transform:uppercase;letter-spacing:1px;font-size:15px;border-radius:8px;
+    cursor:pointer;transition:.15s}
+  .tab.on{background:var(--green-dim);border-color:var(--green);color:#fff}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:16px}
+  label{display:block;font-size:12px;text-transform:uppercase;letter-spacing:.8px;
+    color:var(--muted);margin:0 0 6px;font-weight:600}
+  input,textarea{width:100%;background:var(--field);border:1px solid var(--line);
+    color:var(--text);border-radius:8px;padding:11px 12px;font-size:15px;font-family:inherit;outline:none}
+  input:focus,textarea:focus{border-color:var(--green)}
+  .row{display:flex;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .row>div{flex:1;min-width:140px}
+  .full{margin-bottom:14px}
+  .full:last-child{margin-bottom:0}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:12px;padding:5px 10px;background:var(--panel2);border:1px solid var(--line);
+    color:var(--muted);border-radius:20px;cursor:pointer;transition:.15s;font-family:inherit}
+  .chip:hover{border-color:var(--green);color:var(--text)}
+  .go{width:100%;padding:14px;background:var(--green);color:var(--on-green);border:none;border-radius:10px;
+    font-family:'Barlow Condensed',sans-serif;font-weight:700;text-transform:uppercase;
+    letter-spacing:1.5px;font-size:18px;cursor:pointer;transition:.15s}
+  .go:hover{background:var(--green-hover)}
+  .go:disabled{opacity:.5;cursor:wait}
+  .score{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:8px;
+    font-family:'Barlow Condensed',sans-serif}
+  .score .t{font-size:18px;font-weight:600;max-width:38%}
+  .score .n{font-size:40px;font-weight:700;color:var(--green-text);white-space:nowrap}
+  .sub{text-align:center;color:var(--muted);font-size:13px;margin-bottom:12px}
+  .out{white-space:pre-wrap;background:var(--field);border:1px solid var(--line);border-radius:8px;
+    padding:16px;font-size:15px;line-height:1.65;margin-top:4px;min-height:52px;overflow-wrap:anywhere}
+  .outbar{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+  .outbar h3{font-family:'Barlow Condensed',sans-serif;text-transform:uppercase;letter-spacing:1px;
+    margin:0;font-size:17px;color:var(--green-text)}
+  .copy{padding:8px 14px;background:var(--panel2);border:1px solid var(--green);color:var(--green-text);
+    border-radius:7px;font-weight:600;font-size:13px;cursor:pointer}
+  .copy.done{background:var(--green);color:var(--on-green)}
+  .status{margin-top:10px;font-size:13px;color:var(--muted)}
+  .err,.warn{padding:12px 14px;border-radius:8px;font-size:14px;border:1px solid}
+  .err{background:var(--err-bg);border-color:var(--err-line);color:var(--err-text)}
+  .warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-text);margin-top:10px}
+  .hide{display:none}
+  .hint{font-size:12px;color:var(--muted);margin-top:6px}
+  .spin{display:inline-block;width:15px;height:15px;border:2px solid rgba(255,255,255,.3);
+    border-top-color:var(--on-green);border-radius:50%;animation:rot .7s linear infinite;vertical-align:-2px;margin-right:8px}
+  .status .spin{width:12px;height:12px;border-color:var(--line);border-top-color:var(--green)}
+  @keyframes rot{to{transform:rotate(360deg)}}
+  .foot{text-align:center;font-size:12px;color:var(--muted);margin-top:24px}
+  .link{background:none;border:none;padding:0;color:var(--green-text);font:inherit;cursor:pointer;text-decoration:underline}
+  @media (max-width:480px){
+    h1{font-size:21px}
+    .score .n{font-size:32px}
+    .score .t{font-size:16px}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="dot"></span>
+    <h1>HandbaLive<span>BV</span> · Generator postări</h1>
+    <button class="theme" id="themeBtn" onclick="toggleTheme()" aria-label="Schimbă tema" title="Schimbă tema">
+      <svg class="i-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      <svg class="i-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+    </button>
+  </header>
+
+  <!-- ACCESS -->
+  <div class="card hide" id="accessCard">
+    <label for="pass">Parolă de acces</label>
+    <input id="pass" type="password" autocomplete="current-password" placeholder="Parola setată în Netlify (ACCESS_PASSWORD)">
+    <div class="hint">Se verifică la prima generare, apoi rămâne salvată pe acest dispozitiv.</div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab on" id="tabPost" onclick="setMode('post')">După meci</button>
+    <button class="tab" id="tabPre" onclick="setMode('pre')">Înainte de meci</button>
+  </div>
+
+  <!-- POST-MATCH -->
+  <div id="panelPost">
+    <div class="card">
+      <div class="full">
+        <label for="matchPost">1 · Link meci</label>
+        <input id="matchPost" inputmode="url" placeholder="https://www.frhlive2.com/indexut.html?utakmica=…">
+        <div class="hint">Deschide meciul pe frhlive2.com și copiază adresa din bara browserului (sau scrie doar numărul meciului).</div>
+      </div>
+      <div class="full">
+        <label for="ctxPost">2 · Context</label>
+        <input id="ctxPost" placeholder='ex: finală, Corona campioană la Junioare 1'>
+        <div class="chips" id="ctxChips"></div>
+      </div>
+      <div class="full">
+        <label for="ytPost">Link YouTube replay (opțional)</label>
+        <input id="ytPost" placeholder="https://www.youtube.com/live/…">
+      </div>
+      <button class="go" id="goPost" onclick="run('post')">Generează articol</button>
+    </div>
+  </div>
+
+  <!-- PRE-MATCH -->
+  <div id="panelPre" class="hide">
+    <div class="card">
+      <div class="row">
+        <div><label for="home">Gazde</label><input id="home" placeholder="Corona Brașov"></div>
+        <div><label for="away">Oaspeți</label><input id="away" placeholder="Rapid București"></div>
+      </div>
+      <div class="full">
+        <label for="ctxPre">Context</label>
+        <input id="ctxPre" placeholder="finală Junioare 1">
+      </div>
+      <div class="row">
+        <div><label for="time">Ora</label><input id="time" placeholder="13:30"></div>
+        <div><label for="venue">Locație</label><input id="venue" placeholder="TeraPlast Arena"></div>
+        <div><label for="cityPre">Oraș</label><input id="cityPre" placeholder="Bistrița"></div>
+      </div>
+      <div class="full">
+        <label for="ytPre">Link YouTube LIVE</label>
+        <input id="ytPre" placeholder="https://www.youtube.com/live/…">
+      </div>
+      <button class="go" id="goPre" onclick="run('pre')">Generează teaser</button>
+    </div>
+  </div>
+
+  <div id="errBox"></div>
+
+  <!-- RESULT -->
+  <div id="result" class="hide">
+    <div class="card">
+      <div id="scoreBox"></div>
+      <div class="outbar">
+        <h3>Postare</h3>
+        <button class="copy" id="copyBtn" onclick="copyOut()">Copiază</button>
+      </div>
+      <div class="out" id="out"></div>
+      <div id="status"></div>
+    </div>
+  </div>
+
+  <div class="foot hide" id="passSaved">
+    🔒 Parola de acces e salvată pe acest dispozitiv · <button class="link" onclick="forgetPass()">Schimbă parola</button>
+  </div>
+</div>
+
+<script>
+const CONTEXT_CHIPS = [
+  "finală, [echipa] campioană",
+  "semifinală turneu final",
+  "etapa 12, derby local",
+  "al 3-lea meci turneu final",
+  "meci amical, fără miză"
+];
+const KEY_PASS='hlbv-pass', KEY_THEME='hlbv-theme';
+
+const $=id=>document.getElementById(id);
+function load(k){try{return localStorage.getItem(k);}catch(e){return null;}}
+function store(k,v){try{v==null?localStorage.removeItem(k):localStorage.setItem(k,v);}catch(e){}}
+
+// ---- theme ----
+function toggleTheme(){
+  const next=document.documentElement.getAttribute('data-theme')==='light'?'dark':'light';
+  document.documentElement.setAttribute('data-theme',next);
+  store(KEY_THEME,next);
+  labelTheme();
+}
+function labelTheme(){
+  const light=document.documentElement.getAttribute('data-theme')==='light';
+  const t=light?'Comută pe tema întunecată':'Comută pe tema luminoasă';
+  $('themeBtn').setAttribute('aria-label',t);$('themeBtn').title=t;
+}
+matchMedia('(prefers-color-scheme: light)').addEventListener('change',e=>{
+  if(load(KEY_THEME))return; // an explicit choice wins over the system
+  document.documentElement.setAttribute('data-theme',e.matches?'light':'dark');labelTheme();
+});
+labelTheme();
+
+// ---- access password ----
+let PASS=load(KEY_PASS)||'';
+function showAccess(show){
+  $('accessCard').classList.toggle('hide',!show);
+  $('passSaved').classList.toggle('hide',show);
+}
+function forgetPass(){
+  PASS='';store(KEY_PASS,null);$('pass').value='';
+  showAccess(true);$('pass').focus();
+}
+showAccess(!PASS);
+
+// ---- form ----
+CONTEXT_CHIPS.forEach(c=>{
+  const b=document.createElement('button');b.type='button';b.className='chip';b.textContent=c;
+  b.onclick=()=>{$('ctxPost').value=c;};
+  $('ctxChips').appendChild(b);
+});
+
+function setMode(m){
+  const post=m==='post';
+  $('tabPost').classList.toggle('on',post);
+  $('tabPre').classList.toggle('on',!post);
+  $('panelPost').classList.toggle('hide',!post);
+  $('panelPre').classList.toggle('hide',post);
+}
+
+function val(id){return $(id).value.trim();}
+function el(tag,cls,text){const e=document.createElement(tag);if(cls)e.className=cls;if(text!=null)e.textContent=text;return e;}
+function showErr(msg){$('errBox').replaceChildren(el('div','err',msg));}
+function clearErr(){$('errBox').replaceChildren();}
+function setStatus(kind,msg){
+  const s=$('status');s.replaceChildren();
+  if(kind==='busy'){const d=el('div','status');d.append(el('span','spin'),msg);s.append(d);}
+  else if(kind==='warn'){s.append(el('div','warn',msg));}
+}
+
+function renderScore(m){
+  const sb=$('scoreBox');sb.replaceChildren();
+  const row=el('div','score');
+  row.append(el('span','t',m.home||''),el('span','n',m.score||''),el('span','t',m.away||''));
+  const place=[m.venue,m.city].filter(Boolean).join(' ');
+  const sub=[m.competition,place,m.ht?'pauză '+m.ht:''].filter(Boolean).join(' · ');
+  sb.append(row,el('div','sub',sub));
+}
+
+function buildPayload(mode){
+  if(mode==='pre'){
+    return {mode,home:val('home'),away:val('away'),context:val('ctxPre'),
+      time:val('time'),venue:val('venue'),city:val('cityPre'),youtube:val('ytPre')};
+  }
+  const m=val('matchPost');
+  if(!m) throw new Error('Lipește linkul meciului de pe frhlive2.com.');
+  const p={mode,context:val('ctxPost'),youtube:val('ytPost')};
+  if(m.startsWith('{')) p.matchData=m; // rezervă: JSON de la vechiul bookmarklet
+  else if(/utakmica=\d{3,12}/i.test(m)||/^\d{3,12}$/.test(m)) p.match=m;
+  else throw new Error('Linkul nu pare de pe frhlive2: trebuie să conțină „utakmica=NUMĂR” (sau scrie doar numărul meciului).');
+  return p;
+}
+
+async function run(mode){
+  clearErr();
+  $('result').classList.add('hide');
+  if(val('pass'))PASS=val('pass');
+  if(!PASS){showAccess(true);$('pass').focus();return showErr('Introdu parola de acces.');}
+
+  let payload;
+  try{payload=buildPayload(mode);}catch(e){return showErr(e.message);}
+
+  const btn=$(mode==='post'?'goPost':'goPre');
+  const label=btn.textContent;
+  btn.disabled=true;btn.replaceChildren(el('span','spin'),'Se generează…');
+  try{
+    const res=await fetch('/.netlify/functions/generate',{
+      method:'POST',
+      headers:{'content-type':'application/json','x-access-password':PASS},
+      body:JSON.stringify(payload)
+    });
+    const ct=res.headers.get('content-type')||'';
+    if(!res.ok||!ct.includes('ndjson')){
+      let data={};try{data=await res.json();}catch(_){}
+      if(res.status===401){PASS='';store(KEY_PASS,null);$('pass').value='';showAccess(true);$('pass').focus();}
+      return showErr(data.error||('Eroare de server ('+res.status+'). Încearcă din nou.'));
+    }
+    // Parola a trecut: o păstrăm.
+    store(KEY_PASS,PASS);$('pass').value='';showAccess(false);
+    await readArticle(res,mode);
+  }catch(e){
+    showErr('Conexiune eșuată: '+e.message);
+  }finally{
+    btn.disabled=false;btn.textContent=label;
+  }
+}
+
+// The server sends one JSON event per line: match → text… → done | error.
+async function readArticle(res,mode){
+  $('scoreBox').replaceChildren();
+  $('out').textContent='';
+  const cp=$('copyBtn');cp.textContent='Copiază';cp.classList.remove('done');
+  setStatus('busy',mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
+  $('result').classList.remove('hide');
+  $('result').scrollIntoView({behavior:'smooth',block:'start'});
+
+  const reader=res.body.getReader();
+  const dec=new TextDecoder();
+  let buf='',text='',finished=false,error=null;
+  const handle=line=>{
+    if(!line.trim())return;
+    let ev;try{ev=JSON.parse(line);}catch(_){return;}
+    if(ev.type==='match')renderScore(ev.match);
+    else if(ev.type==='text'){text+=ev.text;$('out').textContent=text;}
+    else if(ev.type==='done')finished=true;
+    else if(ev.type==='error')error=ev.error;
+  };
+  try{
+    while(true){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let nl;
+      while((nl=buf.indexOf('\n'))>=0){handle(buf.slice(0,nl));buf=buf.slice(nl+1);}
+    }
+    handle(buf);
+  }catch(_){ /* connection dropped — treated as incomplete below */ }
+
+  if(finished&&!error){setStatus();return;}
+  if(!text){
+    $('result').classList.add('hide');
+    return showErr(error||'Conexiunea s-a întrerupt înainte să apară textul. Încearcă din nou.');
+  }
+  setStatus('warn','⚠️ Articolul NU e complet: '+(error||'conexiunea s-a întrerupt în timpul generării.')+
+    ' Verifică finalul înainte să-l postezi sau generează din nou.');
+}
+
+function copyOut(){
+  const t=$('out').textContent;
+  navigator.clipboard.writeText(t).then(()=>{
+    const b=$('copyBtn');b.textContent='Copiat ✓';b.classList.add('done');
+    setTimeout(()=>{b.textContent='Copiază';b.classList.remove('done');},2000);
+  }).catch(()=>{
+    const r=document.createRange();r.selectNodeContents($('out'));
+    const s=getSelection();s.removeAllRanges();s.addRange(r);
+    showErr('Nu am putut copia automat — textul e selectat, apasă Ctrl+C.');
+  });
+}
+</script>
+</body>
+</html>

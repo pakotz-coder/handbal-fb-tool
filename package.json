@@ -2,5 +2,8 @@
   "name": "handball-fb-tool",
   "version": "1.0.0",
   "type": "module",
-  "private": true
+  "private": true,
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.133.0"
+  }
 }
