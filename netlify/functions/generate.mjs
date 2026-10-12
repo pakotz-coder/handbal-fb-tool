@@ -202,6 +202,11 @@ export default async (req) => {
         (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
         `\n\nDate meci (JSON):\n${JSON.stringify(match)}`;
   }
+  // A random opening angle per post: with the same prompt the model keeps reaching for the
+  // same opener ("Păi ce să zic, frate"), so variety has to come from the request.
+  const { angles } = PROMPTS[lang];
+  const pool = angles[body.mode === "pre" ? "pre" : "post"];
+  userText += `\n\n${angles.label}: ${pool[Math.floor(Math.random() * pool.length)]}`;
   const fixLetters = letterFixer(lang, userText);
 
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY; retries 429/5xx before the stream opens
