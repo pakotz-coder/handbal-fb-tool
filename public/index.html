@@ -383,7 +383,7 @@ async function run(mode){
 }
 
 async function generateOne(payload,mode,card){
-  setStatus(card,'busy','Se conectează…');
+  setBusy(card,'Se conectează…');
   card.copy.disabled=true;
   try{
     const res=await fetch('/.netlify/functions/generate',{
@@ -396,6 +396,7 @@ async function generateOne(payload,mode,card){
       let data={};try{data=await res.json();}catch(_){}
       if(res.status===401){PASS='';store(KEY_PASS,null);$('pass').value='';showAccess(true);$('pass').focus();}
       // Errors before any text (password, bad link, missing match) are the same for every language: show once, on top.
+      stopBusy(card);
       card.root.remove();
       return showErr(data.error||('Eroare de server ('+res.status+'). Încearcă din nou.'));
     }
@@ -403,6 +404,7 @@ async function generateOne(payload,mode,card){
     store(KEY_PASS,PASS);$('pass').value='';showAccess(false);
     await readArticle(res,mode,card);
   }catch(e){
+    stopBusy(card);
     setStatus(card,'err','Conexiune eșuată: '+e.message);
   }finally{
     card.copy.disabled=false;
@@ -429,25 +431,31 @@ function showCorrections(card,list){
   card.stat.append(box);
 }
 
+// A busy status with a running seconds counter, so a long wait is visibly still working.
+function setBusy(card,msg){
+  clearInterval(card.timer);
+  const t0=Date.now();
+  const tick=()=>setStatus(card,'busy',msg+' '+Math.round((Date.now()-t0)/1000)+' s');
+  tick();card.timer=setInterval(tick,1000);
+}
+function stopBusy(card){clearInterval(card.timer);}
+
 // The server sends one JSON event per line:
-// match → text… → [replace] → proof_start → proof | proof_error → done, or error before proof_start.
+// match → ping/text… → draft → done, or error. Proofreading is a second request (proofread).
 async function readArticle(res,mode,card){
   card.out.textContent='';
   card.copy.textContent='Copiază';card.copy.classList.remove('done');
-  setStatus(card,'busy',mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
+  setBusy(card,mode==='post'?'Se scrie articolul…':'Se scrie teaserul…');
 
   const reader=res.body.getReader();
   const dec=new TextDecoder();
-  let buf='',text='',error=null,drafted=false,corrections=null,proofError=null;
+  let buf='',text='',error=null,draft=null;
   const handle=line=>{
     if(!line.trim())return;
     let ev;try{ev=JSON.parse(line);}catch(_){return;}
     if(ev.type==='match')renderScore(ev.match);
     else if(ev.type==='text'){text+=ev.text;card.out.textContent=text;}
-    else if(ev.type==='replace'){text=ev.text;card.out.textContent=text;}
-    else if(ev.type==='proof_start'){drafted=true;setStatus(card,'busy','Se verifică gramatica și exprimarea…');}
-    else if(ev.type==='proof'){text=ev.text;card.out.textContent=text;corrections=ev.corrections||[];}
-    else if(ev.type==='proof_error')proofError=ev.error;
+    else if(ev.type==='draft'){draft=ev;text=ev.text;card.out.textContent=text;}
     else if(ev.type==='error')error=ev.error;
   };
   try{
@@ -460,20 +468,36 @@ async function readArticle(res,mode,card){
     }
     handle(buf);
   }catch(_){ /* connection dropped — handled below */ }
+  stopBusy(card);
 
-  if(corrections){showCorrections(card,corrections);return;}
-  if(drafted){
-    // The article itself is complete; only the proofreading did not finish.
-    setStatus(card,'warn','⚠️ Corectura automată nu s-a încheiat ('+(proofError||'conexiunea s-a întrerupt')+
-      '). Textul e complet, dar necorectat — recitește-l înainte să-l postezi.');
-    return;
-  }
+  if(draft)return proofreadCard(card,draft.text,draft.corrections||[]);
   if(!text){
     card.out.classList.add('hide');
     return setStatus(card,'err',error||'Conexiunea s-a întrerupt înainte să apară textul. Încearcă din nou.');
   }
   setStatus(card,'warn','⚠️ Articolul NU e complet: '+(error||'conexiunea s-a întrerupt în timpul generării.')+
     ' Verifică finalul înainte să-l postezi sau generează din nou.');
+}
+
+// Second request, with its own time limit: only the corrections come back.
+async function proofreadCard(card,text,openerFixes){
+  setBusy(card,'Se verifică gramatica și exprimarea…');
+  try{
+    const res=await fetch('/.netlify/functions/proofread',{
+      method:'POST',
+      headers:{'content-type':'application/json','x-access-password':PASS},
+      body:JSON.stringify({lang:card.lang,text})
+    });
+    let data={};try{data=await res.json();}catch(_){}
+    if(!res.ok||data.error)throw new Error(data.error||('eroare de server '+res.status));
+    card.out.textContent=data.text;
+    stopBusy(card);
+    showCorrections(card,[...openerFixes,...(data.corrections||[])]);
+  }catch(e){
+    stopBusy(card);
+    setStatus(card,'warn','⚠️ Corectura automată nu s-a încheiat ('+e.message+
+      '). Textul e complet, dar necorectat — recitește-l înainte să-l postezi.');
+  }
 }
 
 function copyOut(card){

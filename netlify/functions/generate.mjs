@@ -1,65 +1,29 @@
 // generate.mjs — Netlify Function (v2, streaming)
-// Streams the article as NDJSON so the page can tell a finished article from a cut one,
-// then runs a proofreading pass that returns only the corrections to apply.
+// Streams the article as NDJSON so the page can tell a finished article from a cut one.
+// Proofreading runs as a separate request (proofread.mjs), so each gets its own 60 s limit.
 // ANTHROPIC_API_KEY and ACCESS_PASSWORD live only here, as Netlify environment variables.
 
 import Anthropic from "@anthropic-ai/sdk";
-import { betaJSONSchemaOutputFormat } from "@anthropic-ai/sdk/helpers/beta/json-schema";
-import { createHash, timingSafeEqual } from "node:crypto";
 import { parseMatchId, fetchMatch } from "../../lib/match.mjs";
 import { huPlaceNames } from "../../lib/places-hu.mjs";
-import { RO } from "../../lib/prompts-ro.mjs";
-import { HU } from "../../lib/prompts-hu.mjs";
+import {
+  MODEL, PROMPTS, PROMPTS_VERSION, json, checkAccess, apiErrorMessage, letterFixer, stripStockOpeners,
+} from "../../lib/common.mjs";
 
-const MODEL = "claude-sonnet-5-5"; // swap to "claude-opus-5-5" for richer flavor (slower, ~2x price)
-const EFFORT = "medium";           // medium = more care with grammar and stats; "low" starts faster
+// low: the model starts writing within seconds. At "medium" the richer humor prompt made it
+// think so long that Netlify's 60 s limit cut the function before any text appeared.
+// Grammar is checked afterwards by the proofreading request anyway.
+const EFFORT = "low";
 const MAX_TOKENS = 8000;           // article + thinking; also caps the cost of one request
-const PROOF_MAX_TOKENS = 6000;     // proofreading: thinking + a short list of corrections
 const MAX_BODY = 100_000;          // bytes; an old-bookmarklet JSON is ~12 KB
 const LIMITS = { context: 300, youtube: 300, home: 100, away: 100, time: 50, venue: 150, city: 100 };
-
-const PROMPTS = { ro: RO, hu: HU };
-const REGIONAL_CHANCE = 0.7; // share of posts that get one regional expression; the rest get none
+const REGIONAL_CHANCE = 0.7;       // share of posts that get one regional expression; the rest get none
+const PING_EVERY = 10_000;         // ms; keeps the connection visibly alive while the model thinks
 
 // n distinct random items from a list.
 function pick(list, n) {
   const copy = [...list];
   return Array.from({ length: Math.min(n, copy.length) }, () => copy.splice(Math.floor(Math.random() * copy.length), 1)[0]);
-}
-
-// Fingerprint of the prompts, sent on every response (even a 401), so a deploy can be
-// verified from outside: compare it with the same hash computed from the repo.
-const PROMPTS_VERSION = createHash("sha256").update(JSON.stringify(PROMPTS)).digest("hex").slice(0, 10);
-
-// Stock openers the model falls back to ("Păi ce să zic, frate, …"). The prompt asks for a
-// direct first sentence; this is the safety net. Only removed at the start of a paragraph,
-// and the next word gets a capital: "Păi ce să zic, frate, Brăila a…" → "Brăila a…".
-const STOCK_OPENERS = {
-  ro: /^(?:păi|pai)(?:\s+ce\s+(?:să|sa)\s+(?:zic|spun))?(?:\s*,\s*(?:frate|fraților|fratilor|dragilor))?\s*[,:;!.…—–-]*\s+|^(?:frate|fraților|fratilor)\s*[,:;!…—–-]+\s*/iu,
-  hu: /^(?:hát\s+mit\s+mondjak|hát|na|nos)\s*[,:;!.…—–-]+\s*/iu,
-};
-function stripStockOpeners(text, lang) {
-  const removed = [];
-  const out = text.split("\n").map((line) => {
-    const m = line.match(STOCK_OPENERS[lang]);
-    if (!m || m[0].length >= line.length) return line;
-    const rest = line.slice(m[0].length);
-    removed.push(m[0].trim());
-    return rest.charAt(0).toLocaleUpperCase(lang) + rest.slice(1);
-  }).join("\n");
-  return { text: out, removed };
-}
-
-// Look-alike letters the model occasionally writes: cedilla ş/ţ instead of comma ș/ț (RO),
-// õ/û instead of double-acute ő/ű (HU). A letter that appears in the source data
-// (e.g. a foreign player's name) is left alone, so names are never altered.
-const LOOKALIKES = {
-  ro: [["ş", "ș"], ["Ş", "Ș"], ["ţ", "ț"], ["Ţ", "Ț"]],
-  hu: [["õ", "ő"], ["Õ", "Ő"], ["û", "ű"], ["Û", "Ű"]],
-};
-function letterFixer(lang, source) {
-  const pairs = LOOKALIKES[lang].filter(([bad]) => !source.includes(bad));
-  return (s) => pairs.reduce((t, [bad, good]) => t.split(bad).join(good), s);
 }
 
 // Hungarian names only for the localities that appear in this request (lib/places-hu.mjs).
@@ -70,103 +34,9 @@ function huPlaceLine(texts) {
     : "Magyar helységnevek: nincs ilyen — minden település a hivatalos román nevén szerepeljen.";
 }
 
-const CORRECTIONS_FORMAT = betaJSONSchemaOutputFormat({
-  type: "object",
-  properties: {
-    corrections: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          original: { type: "string" },
-          corrected: { type: "string" },
-          reason: { type: "string" },
-        },
-        required: ["original", "corrected", "reason"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["corrections"],
-  additionalProperties: false,
-});
-
-// Applies only corrections that are safe: the original must occur exactly once,
-// and the digits must stay the same, so a correction can never change a statistic.
-function applyCorrections(text, corrections) {
-  const digits = (s) => (s.match(/\d+/g) || []).join(",");
-  const applied = [];
-  for (const c of corrections || []) {
-    const { original, corrected, reason } = c;
-    if (!original || original === corrected) continue;
-    if (digits(original) !== digits(corrected)) continue;
-    const at = text.indexOf(original);
-    if (at < 0 || text.indexOf(original, at + 1) >= 0) continue;
-    text = text.slice(0, at) + corrected + text.slice(at + original.length);
-    applied.push({ original, corrected, reason });
-  }
-  return { text, applied };
-}
-
-async function proofread(client, draft, lang, signal) {
-  const msg = await client.beta.messages.parse(
-    {
-      model: MODEL,
-      max_tokens: PROOF_MAX_TOKENS,
-      output_config: { effort: "medium", format: CORRECTIONS_FORMAT },
-      betas: ["server-side-fallback-2026-07-01"],
-      fallbacks: "default",
-      system: PROMPTS[lang].proof,
-      messages: [{ role: "user", content: `<articol>\n${draft}\n</articol>` }],
-    },
-    { signal },
-  );
-  if (msg.stop_reason !== "end_turn" || !msg.parsed_output)
-    throw new Error(`corectorul nu a răspuns complet (${msg.stop_reason})`);
-  return applyCorrections(draft, msg.parsed_output.corrections);
-}
-
-function json(obj, status = 200) {
-  return new Response(JSON.stringify(obj), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=utf-8",
-      "cache-control": "no-store",
-      "x-prompts-version": PROMPTS_VERSION,
-    },
-  });
-}
-
-// Constant-time compare; hashing first makes both sides the same length.
-function samePassword(given, expected) {
-  const a = createHash("sha256").update(String(given)).digest();
-  const b = createHash("sha256").update(String(expected)).digest();
-  return timingSafeEqual(a, b);
-}
-
-function apiErrorMessage(e) {
-  if (e instanceof Anthropic.AuthenticationError) return "Cheia ANTHROPIC_API_KEY din Netlify e invalidă sau a expirat.";
-  if (e instanceof Anthropic.PermissionDeniedError) return "Cheia API nu are acces la modelul " + MODEL + ".";
-  if (e instanceof Anthropic.RateLimitError) return "Limita de cereri Claude a fost atinsă. Încearcă din nou peste un minut.";
-  // Mid-stream errors arrive without an HTTP status, so check the API error type too.
-  if (e instanceof Anthropic.InternalServerError || (e instanceof Anthropic.APIError && e.type === "overloaded_error"))
-    return "Serverele Claude sunt suprasolicitate. Încearcă din nou peste un minut.";
-  if (e instanceof Anthropic.APIConnectionError) return "Conexiunea cu Claude s-a întrerupt. Încearcă din nou.";
-  if (e instanceof Anthropic.APIError) return "Eroare Claude: " + (e.error?.error?.message || e.message);
-  return "Eroare neașteptată: " + (e?.message || e);
-}
-
 export default async (req) => {
-  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
-
-  const expected = process.env.ACCESS_PASSWORD;
-  if (!expected) return json({ error: "Lipsește ACCESS_PASSWORD în setările Netlify (Environment variables)." }, 500);
-  if (!process.env.ANTHROPIC_API_KEY) return json({ error: "Lipsește ANTHROPIC_API_KEY în setările Netlify." }, 500);
-
-  if (!samePassword(req.headers.get("x-access-password") || "", expected)) {
-    await new Promise((r) => setTimeout(r, 1000)); // slows down guessing
-    return json({ error: "Parolă de acces greșită.", auth: true }, 401);
-  }
+  const denied = await checkAccess(req);
+  if (denied) return denied;
 
   const raw = await req.text();
   if (raw.length > MAX_BODY) return json({ error: "Cerere prea mare." }, 413);
@@ -261,14 +131,15 @@ export default async (req) => {
     messages: [{ role: "user", content: userText }],
   });
 
-  // NDJSON events: match (post only) → text… → proof_start → proof | proof_error → done;
-  // or error at any point before proof_start.
+  // NDJSON events: match (post only) → ping/text… → draft → done; or error.
+  // "draft" carries the final text (stock openers removed) for the proofreading request.
   const encoder = new TextEncoder();
-  const proofAbort = new AbortController();
+  let ping;
   const out = new ReadableStream({
     async start(controller) {
       // try/catch: after cancel() the controller is closed and enqueue would throw.
       const send = (obj) => { try { controller.enqueue(encoder.encode(JSON.stringify(obj) + "\n")); } catch {} };
+      ping = setInterval(() => send({ type: "ping" }), PING_EVERY);
       try {
         if (match) {
           const { home, away, score, ht, competition, venue, city } = match;
@@ -288,37 +159,20 @@ export default async (req) => {
         } else if (final.stop_reason === "max_tokens") {
           send({ type: "error", error: "Articolul a atins limita de lungime și e tăiat la final." });
         } else {
-          // The draft is complete; a failed proofreading pass only means it stays uncorrected.
-          const opener = stripStockOpeners(draft, lang);
-          if (opener.removed.length) {
-            draft = opener.text;
-            send({ type: "replace", text: draft });
-          }
-          const openerFixes = opener.removed.map((original) => ({
-            original,
-            corrected: "—",
-            reason: hu ? "sablonos kezdés törölve" : "formulă de început, eliminată",
-          }));
-          send({ type: "proof_start" });
-          try {
-            const { text, applied } = await proofread(client, draft, lang, proofAbort.signal);
-            send({ type: "proof", text: fixLetters(text), corrections: [...openerFixes, ...applied] });
-          } catch (e) {
-            if (e instanceof Anthropic.APIUserAbortError) return;
-            send({ type: "proof_error", error: e instanceof Anthropic.APIError ? apiErrorMessage(e) : e.message });
-          }
+          const cleaned = stripStockOpeners(draft, lang);
+          send({ type: "draft", text: cleaned.text, corrections: cleaned.corrections });
           send({ type: "done" });
         }
       } catch (e) {
-        if (e instanceof Anthropic.APIUserAbortError) return; // page closed; stream already cancelled
-        send({ type: "error", error: apiErrorMessage(e) });
+        if (!(e instanceof Anthropic.APIUserAbortError)) send({ type: "error", error: apiErrorMessage(e) });
+      } finally {
+        clearInterval(ping);
       }
       try { controller.close(); } catch {}
     },
     cancel() {
-      // The page was closed — stop paying for tokens nobody reads.
-      stream.abort();
-      proofAbort.abort();
+      clearInterval(ping);
+      stream.abort(); // the page was closed — stop paying for tokens nobody reads
     },
   });
 

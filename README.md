@@ -6,7 +6,9 @@ pe server, de pe sportinfocentar2.com; cheia API și parola de acces stau doar �
 ## Structură
 ```
 public/index.html               → interfața (după meci / înainte de meci, temă luminoasă/întunecată)
-netlify/functions/generate.mjs  → verifică parola, ia datele meciului, apelează Claude (streaming)
+netlify/functions/generate.mjs  → verifică parola, ia datele meciului, scrie articolul (streaming)
+netlify/functions/proofread.mjs → corectura articolului scris (cerere separată)
+lib/common.mjs                  → comun: model, parolă, erori, litere, formule de început
 lib/prompts-ro.mjs              → prompturile în română (articol, teaser, corector)
 lib/prompts-hu.mjs              → prompturile în maghiară (aceeași structură)
 lib/places-hu.mjs               → nume maghiare ale orașelor (listă verificată manual, în repo)
@@ -32,11 +34,13 @@ netlify.toml                    → config (publică doar public/)
 Prima dată pagina cere parola de acces; după prima generare reușită rămâne salvată în browser
 („Schimbă parola” jos în pagină).
 
-Corectură automată: după ce articolul e scris, un al doilea apel Claude îl recitește și întoarce
-doar greșelile de gramatică și exprimare. Ele se aplică pe server, iar sub articol apare lista
-„Corectură automată: N modificări”. O corectură se aplică doar dacă fragmentul apare o singură
-dată în text și nu schimbă nicio cifră, deci statisticile nu pot fi atinse. „Copiază” devine
-activ abia după corectură.
+Corectură automată: după ce articolul e scris, pagina trimite o a doua cerere
+(`/.netlify/functions/proofread`), care recitește textul și întoarce doar greșelile de gramatică
+și exprimare. E separată intenționat: Netlify oprește o funcție după 60 de secunde, iar scrierea
+și corectura împreună puteau depăși limita. Sub articol apare lista „Corectură automată: N
+modificări”. O corectură se aplică doar dacă fragmentul apare o singură dată în text și nu
+schimbă nicio cifră, deci statisticile nu pot fi atinse. „Copiază” devine activ abia după
+corectură. Cât timp lucrează, pagina arată un cronometru („Se scrie articolul… 14 s”).
 
 Dacă generarea se întrerupe (Claude suprasolicitat, conexiune căzută, limită de lungime), sub
 articol apare un avertisment galben: **nu posta textul fără să verifici finalul**. Dacă doar
@@ -63,13 +67,14 @@ Costul se dublează. Interfața rămâne în română; contextul se poate scrie 
   în română, õ/û → ő/ű în maghiară. Excepție: litera apare chiar în datele meciului (un nume străin).
 
 ## Model
-În `generate.mjs`, sus:
-- `MODEL = "claude-sonnet-5-5"` — schimbă în `"claude-opus-5-5"` pentru savoare mai bogată
-  (mai lent, cam de 2× mai scump).
-- `EFFORT = "medium"` — mai multă grijă la gramatică și statistici; `"low"` pornește mai repede.
+- `MODEL = "claude-sonnet-5-5"` în `lib/common.mjs` — schimbă în `"claude-opus-5-5"` pentru
+  savoare mai bogată (mai lent, cam de 2× mai scump).
+- `EFFORT = "low"` în `generate.mjs` — articolul pornește în câteva secunde. La `"medium"`,
+  promptul cu mult umor îl făcea să gândească atât de mult încât Netlify oprea funcția (60 s)
+  înainte să apară textul. Gramatica o verifică oricum corectura.
 - `MAX_TOKENS = 8000` — plafonează și costul maxim al unei cereri.
-- `PROOF_MAX_TOKENS = 6000` — plafonul pentru corectură (gândire + lista de corecturi).
-  Corectura adaugă cam 5-10 secunde și ~1 cent pe articol.
+- `PROOF_MAX_TOKENS = 6000` în `proofread.mjs` — plafonul pentru corectură (gândire + lista de
+  corecturi). Corectura adaugă cam 5-10 secunde și ~1 cent pe articol.
 - Ton: glumeț (măcar o poantă pe paragraf), tentă ardelenească fină. Ca postările să nu semene
   între ele, serverul alege la întâmplare, pentru fiecare postare: un „unghi de deschidere”, două
   „procedee de umor” și, în ~70% din cazuri, o singură expresie regională. Listele sunt în
