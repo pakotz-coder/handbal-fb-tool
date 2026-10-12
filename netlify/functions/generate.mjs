@@ -20,6 +20,29 @@ const LIMITS = { context: 300, youtube: 300, home: 100, away: 100, time: 50, ven
 
 const PROMPTS = { ro: RO, hu: HU };
 
+// Fingerprint of the prompts, sent on every response (even a 401), so a deploy can be
+// verified from outside: compare it with the same hash computed from the repo.
+const PROMPTS_VERSION = createHash("sha256").update(JSON.stringify(PROMPTS)).digest("hex").slice(0, 10);
+
+// Stock openers the model falls back to ("Păi ce să zic, frate, …"). The prompt asks for a
+// direct first sentence; this is the safety net. Only removed at the start of a paragraph,
+// and the next word gets a capital: "Păi ce să zic, frate, Brăila a…" → "Brăila a…".
+const STOCK_OPENERS = {
+  ro: /^(?:păi|pai)(?:\s+ce\s+(?:să|sa)\s+(?:zic|spun))?(?:\s*,\s*(?:frate|fraților|fratilor|dragilor))?\s*[,:;!.…—–-]*\s+|^(?:frate|fraților|fratilor)\s*[,:;!…—–-]+\s*/iu,
+  hu: /^(?:hát\s+mit\s+mondjak|hát|na|nos)\s*[,:;!.…—–-]+\s*/iu,
+};
+function stripStockOpeners(text, lang) {
+  const removed = [];
+  const out = text.split("\n").map((line) => {
+    const m = line.match(STOCK_OPENERS[lang]);
+    if (!m || m[0].length >= line.length) return line;
+    const rest = line.slice(m[0].length);
+    removed.push(m[0].trim());
+    return rest.charAt(0).toLocaleUpperCase(lang) + rest.slice(1);
+  }).join("\n");
+  return { text: out, removed };
+}
+
 // Look-alike letters the model occasionally writes: cedilla ş/ţ instead of comma ș/ț (RO),
 // õ/û instead of double-acute ő/ű (HU). A letter that appears in the source data
 // (e.g. a foreign player's name) is left alone, so names are never altered.
@@ -99,7 +122,11 @@ async function proofread(client, draft, lang, signal) {
 function json(obj, status = 200) {
   return new Response(JSON.stringify(obj), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-prompts-version": PROMPTS_VERSION,
+    },
   });
 }
 
@@ -249,10 +276,20 @@ export default async (req) => {
           send({ type: "error", error: "Articolul a atins limita de lungime și e tăiat la final." });
         } else {
           // The draft is complete; a failed proofreading pass only means it stays uncorrected.
+          const opener = stripStockOpeners(draft, lang);
+          if (opener.removed.length) {
+            draft = opener.text;
+            send({ type: "replace", text: draft });
+          }
+          const openerFixes = opener.removed.map((original) => ({
+            original,
+            corrected: "—",
+            reason: hu ? "sablonos kezdés törölve" : "formulă de început, eliminată",
+          }));
           send({ type: "proof_start" });
           try {
             const { text, applied } = await proofread(client, draft, lang, proofAbort.signal);
-            send({ type: "proof", text: fixLetters(text), corrections: applied });
+            send({ type: "proof", text: fixLetters(text), corrections: [...openerFixes, ...applied] });
           } catch (e) {
             if (e instanceof Anthropic.APIUserAbortError) return;
             send({ type: "proof_error", error: e instanceof Anthropic.APIError ? apiErrorMessage(e) : e.message });
@@ -273,6 +310,10 @@ export default async (req) => {
   });
 
   return new Response(out, {
-    headers: { "content-type": "application/x-ndjson; charset=utf-8", "cache-control": "no-store" },
+    headers: {
+      "content-type": "application/x-ndjson; charset=utf-8",
+      "cache-control": "no-store",
+      "x-prompts-version": PROMPTS_VERSION,
+    },
   });
 };

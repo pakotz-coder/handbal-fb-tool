@@ -430,7 +430,7 @@ function showCorrections(card,list){
 }
 
 // The server sends one JSON event per line:
-// match → text… → proof_start → proof | proof_error → done, or error before proof_start.
+// match → text… → [replace] → proof_start → proof | proof_error → done, or error before proof_start.
 async function readArticle(res,mode,card){
   card.out.textContent='';
   card.copy.textContent='Copiază';card.copy.classList.remove('done');
@@ -444,6 +444,7 @@ async function readArticle(res,mode,card){
     let ev;try{ev=JSON.parse(line);}catch(_){return;}
     if(ev.type==='match')renderScore(ev.match);
     else if(ev.type==='text'){text+=ev.text;card.out.textContent=text;}
+    else if(ev.type==='replace'){text=ev.text;card.out.textContent=text;}
     else if(ev.type==='proof_start'){drafted=true;setStatus(card,'busy','Se verifică gramatica și exprimarea…');}
     else if(ev.type==='proof'){text=ev.text;card.out.textContent=text;corrections=ev.corrections||[];}
     else if(ev.type==='proof_error')proofError=ev.error;
