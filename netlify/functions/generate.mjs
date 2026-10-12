@@ -19,6 +19,13 @@ const MAX_BODY = 100_000;          // bytes; an old-bookmarklet JSON is ~12 KB
 const LIMITS = { context: 300, youtube: 300, home: 100, away: 100, time: 50, venue: 150, city: 100 };
 
 const PROMPTS = { ro: RO, hu: HU };
+const REGIONAL_CHANCE = 0.7; // share of posts that get one regional expression; the rest get none
+
+// n distinct random items from a list.
+function pick(list, n) {
+  const copy = [...list];
+  return Array.from({ length: Math.min(n, copy.length) }, () => copy.splice(Math.floor(Math.random() * copy.length), 1)[0]);
+}
 
 // Fingerprint of the prompts, sent on every response (even a 401), so a deploy can be
 // verified from outside: compare it with the same hash computed from the repo.
@@ -229,11 +236,17 @@ export default async (req) => {
         (body.youtube ? `\nLink YouTube replay: ${body.youtube}` : "") +
         `\n\nDate meci (JSON):\n${JSON.stringify(match)}`;
   }
-  // A random opening angle per post: with the same prompt the model keeps reaching for the
-  // same opener ("Păi ce să zic, frate"), so variety has to come from the request.
-  const { angles } = PROMPTS[lang];
-  const pool = angles[body.mode === "pre" ? "pre" : "post"];
-  userText += `\n\n${angles.label}: ${pool[Math.floor(Math.random() * pool.length)]}`;
+  // Random opening angle, humor devices and (sometimes) one regional expression per post:
+  // with the same prompt the model keeps reaching for the same formula ("Păi ce să zic, frate",
+  // "nu-i bai"), so variety has to come from the request.
+  const v = PROMPTS[lang].variety;
+  const pre = body.mode === "pre";
+  const lines = [
+    `${v.label}: ${pick(v[pre ? "pre" : "post"], 1)[0]}`,
+    `${v.humorLabel}: ${(pre ? pick(v.humorPre, 1) : pick(v.humor, 2)).join("; ")}`,
+  ];
+  if (Math.random() < REGIONAL_CHANCE) lines.push(`${v.regionalLabel}: „${pick(v.regional, 1)[0]}”`);
+  userText += `\n\n${lines.join("\n")}`;
   const fixLetters = letterFixer(lang, userText);
 
   const client = new Anthropic(); // reads ANTHROPIC_API_KEY; retries 429/5xx before the stream opens

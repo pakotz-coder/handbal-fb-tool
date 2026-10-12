@@ -70,10 +70,12 @@ Costul se dublează. Interfața rămâne în română; contextul se poate scrie 
 - `MAX_TOKENS = 8000` — plafonează și costul maxim al unei cereri.
 - `PROOF_MAX_TOKENS = 6000` — plafonul pentru corectură (gândire + lista de corecturi).
   Corectura adaugă cam 5-10 secunde și ~1 cent pe articol.
-- Ton: umor cald, tentă ardelenească fină (cel mult 1-2 regionalisme pe postare, niciodată la
-  început). Ca postările să nu înceapă toate la fel, serverul alege la întâmplare un „unghi de
-  deschidere” (cifra meciului, momentul-cheie, o comparație, o întrebare…) din listele `ANGLES`
-  din `lib/prompts-ro.mjs` și `lib/prompts-hu.mjs`. Pentru unghiuri noi se adaugă o linie acolo.
+- Ton: glumeț (măcar o poantă pe paragraf), tentă ardelenească fină. Ca postările să nu semene
+  între ele, serverul alege la întâmplare, pentru fiecare postare: un „unghi de deschidere”, două
+  „procedee de umor” și, în ~70% din cazuri, o singură expresie regională. Listele sunt în
+  `VARIETY` din `lib/prompts-ro.mjs` și `lib/prompts-hu.mjs`; pentru idei noi se adaugă o linie.
+- Versiunea live se poate verifica: funcția trimite antetul `x-prompts-version` (hash al
+  prompturilor), care trebuie să fie identic cu cel calculat din repo.
 - Fallback automat: dacă filtrele de siguranță ar refuza o cerere (n-ar trebui, la handbal),
   API-ul o reîncearcă singur pe modelul recomandat de Anthropic.
 
